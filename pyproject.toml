@@ -69,6 +69,10 @@ namespace_packages = true
 explicit_package_bases = true
 mypy_path = "src"
 
+[[tool.mypy.overrides]]
+module = ["tqdm.*", "brotli", "dmconvert.*", "aioresponses.*", "lxml.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
