@@ -16,4 +16,13 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest -m system -v
+      - name: Run system tests
+        run: |
+          set +e
+          uv run pytest -m system -v
+          code=$?
+          if [ "$code" -eq 5 ]; then
+            echo "No system tests collected yet; skipping until M17."
+            exit 0
+          fi
+          exit $code
