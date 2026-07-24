@@ -31,3 +31,6 @@ htmlcov/
 
 # Project runtime
 *.log
+
+# Reference-only symlink to blrec (read-only, not part of this repo)
+/blrec
