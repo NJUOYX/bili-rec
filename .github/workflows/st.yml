@@ -1,0 +1,28 @@
+name: System Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  system:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - name: Run system tests
+        run: |
+          set +e
+          uv run pytest -m system -v
+          code=$?
+          if [ "$code" -eq 5 ]; then
+            echo "No system tests collected yet; skipping until M17."
+            exit 0
+          fi
+          exit $code

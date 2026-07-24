@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# Virtual envs
+.venv/
+venv/
+
+# uv
+# (uv.lock is tracked)
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE / OS
+.qoder/
+.idea/
+.vscode/
+.DS_Store
+
+# Project runtime
+*.log
