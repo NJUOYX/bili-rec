@@ -9,9 +9,18 @@ from typing import Any
 import tomli_w
 
 from birec.setting.env import EnvSettings
-from birec.setting.models import Settings, SettingsOut, TaskSettings
+from birec.setting.helpers import shadow_settings
+from birec.setting.models import BaseModel, Settings, SettingsOut, TaskSettings
 
 __all__ = ("SettingsManager",)
+
+_TASK_SECTIONS: tuple[str, ...] = (
+    "output",
+    "header",
+    "danmaku",
+    "recorder",
+    "postprocessing",
+)
 
 
 class SettingsManager:
@@ -76,3 +85,20 @@ class SettingsManager:
 
     def has_task_settings(self, room_id: int) -> bool:
         return self.find_task_settings(room_id) is not None
+
+    def resolve_task_settings(self, room_id: int) -> dict[str, BaseModel]:
+        """Merge a task's per-section options over the global settings.
+
+        Task option fields left as ``None`` fall back to the global value.
+        The global settings are not mutated.
+        """
+        task = self.find_task_settings(room_id)
+        if task is None:
+            raise ValueError(f"task settings of room {room_id} not found")
+
+        resolved: dict[str, BaseModel] = {}
+        for name in _TASK_SECTIONS:
+            effective = getattr(self._settings, name).model_copy(deep=True)
+            shadow_settings(getattr(task, name), effective)
+            resolved[name] = effective
+        return resolved
