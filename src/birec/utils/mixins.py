@@ -6,13 +6,16 @@ import asyncio
 import os
 import threading
 from abc import ABC, abstractmethod
-from typing import final
+from collections.abc import Coroutine
+from concurrent.futures import Future
+from typing import Any, final
 
 __all__ = (
     "SwitchableMixin",
     "StoppableMixin",
     "AsyncStoppableMixin",
     "SupportDebugMixin",
+    "AsyncCooperationMixin",
 )
 
 
@@ -137,3 +140,33 @@ class SupportDebugMixin:
         else:
             self._debug = False
             self._debug_dir = ""
+
+
+class AsyncCooperationMixin:
+    """Bridges synchronous worker-thread code back to the main asyncio event loop.
+
+    Must be constructed from within an async context (the running loop is captured
+    at ``__init__`` time).  Worker threads can then schedule coroutines on that
+    loop via :meth:`_run_coroutine` / :meth:`_call_coroutine`.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._loop = asyncio.get_running_loop()
+
+    def _run_coroutine[T](self, coro: Coroutine[Any, Any, T]) -> Future[T]:
+        """Schedule *coro* on the captured loop; returns a concurrent Future."""
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+    def _call_coroutine[T](self, coro: Coroutine[Any, Any, T]) -> T:
+        """Schedule *coro* and block until the result is available."""
+        return self._run_coroutine(coro).result()
+
+    def _submit_exception(self, exc: BaseException) -> None:
+        """Push *exc* to the ExceptionCenter from a worker thread."""
+        from ..exception import submit_exception
+
+        async def _wrapper() -> None:
+            submit_exception(exc)
+
+        self._call_coroutine(_wrapper())
