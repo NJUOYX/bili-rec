@@ -24,6 +24,7 @@ dependencies = [
     "tenacity",
     "tqdm",
     "tomli-w",
+    "lxml-html-clean>=0.4.5",
 ]
 
 [project.scripts]
