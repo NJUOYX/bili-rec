@@ -19,6 +19,7 @@ __all__ = (
     "is_audio_tag",
     "is_video_tag",
     "is_script_tag",
+    "is_metadata_tag",
     "is_data_tag",
     "is_audio_data_tag",
     "is_video_data_tag",
@@ -29,6 +30,8 @@ __all__ = (
     "is_avc_end_sequence",
     "is_avc_end_sequence_tag",
     "create_avc_end_sequence_tag",
+    "create_script_tag",
+    "create_metadata_tag",
 )
 
 
@@ -45,6 +48,16 @@ def is_video_tag(tag: FlvTag) -> TypeGuard[VideoTag]:
 def is_script_tag(tag: FlvTag) -> TypeGuard[ScriptTag]:
     """Check if tag is a script tag."""
     return tag.tag_type == TagType.SCRIPT
+
+
+def is_metadata_tag(tag: FlvTag) -> TypeGuard[ScriptTag]:
+    """Check if tag is an onMetaData script tag."""
+    if is_script_tag(tag):
+        from . import scriptdata
+
+        script_data = scriptdata.load(tag.body)
+        return script_data.name == "onMetaData"
+    return False
 
 
 def is_data_tag(tag: FlvTag) -> TypeGuard[AudioTag | VideoTag]:
@@ -106,3 +119,33 @@ def create_avc_end_sequence_tag(offset: int = 0, timestamp: int = 0) -> VideoTag
         avc_packet_type=AVCPacketType.AVC_END_OF_SEQUENCE,
         composition_time=0,
     )
+
+
+def create_script_tag(
+    name: str,
+    value: Any,
+    offset: int = 0,
+    timestamp: int = 0,
+) -> ScriptTag:
+    """Create a script tag with the given name and value."""
+    from . import scriptdata
+
+    body = scriptdata.dump(scriptdata.ScriptData(name=name, value=value))
+    return ScriptTag(
+        filtered=False,
+        tag_type=TagType.SCRIPT,
+        data_size=len(body),
+        timestamp=timestamp,
+        stream_id=0,
+        offset=offset,
+        body=body,
+    )
+
+
+def create_metadata_tag(
+    metadata: dict[str, Any],
+    offset: int = 0,
+    timestamp: int = 0,
+) -> ScriptTag:
+    """Create an onMetaData script tag."""
+    return create_script_tag("onMetaData", metadata, offset, timestamp)
