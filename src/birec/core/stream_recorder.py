@@ -15,6 +15,12 @@ from ..bili.live import Live
 from ..flv.operators import Dumper, ProgressBar, dump, parse, process, progress
 from ..flv.operators.typing import FLVStream
 from ..flv.struct_io import RandomIO
+from ..hls.models import HlsPlaylist, HlsSegment
+from ..hls.operators.analyse import HlsAnalyser
+from ..hls.operators.playlist_dumper import PlaylistDumper
+from ..hls.operators.playlist_resolver import PlaylistResolver
+from ..hls.operators.segment_dumper import SegmentDumper
+from ..hls.operators.segment_fetcher import FetchedSegment, SegmentFetcher
 from .cover_downloader import CoverDownloader
 from .danmaku_dumper import DanmakuDumper
 from .danmaku_receiver import DanmakuReceiver
@@ -64,6 +70,12 @@ class StreamRecorder:
         self._flv_subscription: Disposable | None = None
         self._flv_disposables: CompositeDisposable | None = None
         self._flv_source: Subject[RandomIO] | None = None
+        # HLS pipeline state
+        self._hls_segment_dumper: SegmentDumper | None = None
+        self._hls_playlist_dumper: PlaylistDumper | None = None
+        self._hls_analyser: HlsAnalyser | None = None
+        self._hls_resolver: PlaylistResolver | None = None
+        self._hls_fetcher: SegmentFetcher | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -251,3 +263,96 @@ class StreamRecorder:
         if size < 1024 * 1024 * 1024:
             return f"{size / (1024 * 1024):.1f}MB"
         return f"{size / (1024 * 1024 * 1024):.2f}GB"
+
+    # ─── HLS Pipeline ────────────────────────────────────────────────────
+
+    def create_hls_pipeline(
+        self,
+        output_path: Path,
+        base_url: str = "",
+        *,
+        playlist_path: Path | None = None,
+    ) -> None:
+        """Create an HLS processing pipeline for recording.
+
+        Sets up segment dumper, playlist dumper, analyser, and resolver.
+
+        Args:
+            output_path: Path for the output fMP4 file.
+            base_url: Base URL for resolving relative segment URIs.
+            playlist_path: Optional path to write playlist files.
+        """
+        self._hls_segment_dumper = SegmentDumper(output_path)
+        self._hls_segment_dumper.open()
+        self._hls_playlist_dumper = PlaylistDumper(playlist_path)
+        self._hls_analyser = HlsAnalyser()
+        self._hls_resolver = PlaylistResolver()
+        self._hls_fetcher = SegmentFetcher(self._session, base_url)
+        logger.debug("HLS pipeline created: %s", output_path)
+
+    def feed_hls_playlist(self, playlist: HlsPlaylist) -> list[HlsSegment]:
+        """Feed a playlist into the HLS pipeline.
+
+        Resolves new segments and updates playlist tracking.
+
+        Args:
+            playlist: The parsed playlist.
+
+        Returns:
+            List of new segments to fetch.
+        """
+        if self._hls_resolver is None or self._hls_playlist_dumper is None:
+            return []
+
+        self._hls_playlist_dumper.update(playlist)
+        self._hls_playlist_dumper.dump(playlist)
+        return self._hls_resolver.resolve(playlist)
+
+    def feed_hls_segment(self, fetched: FetchedSegment) -> None:
+        """Feed a fetched segment into the HLS pipeline.
+
+        Writes the segment and updates analysis.
+
+        Args:
+            fetched: The fetched segment with data.
+        """
+        if self._hls_segment_dumper is not None:
+            self._hls_segment_dumper.write_segment(fetched)
+        if self._hls_analyser is not None:
+            self._hls_analyser.add_segment(fetched)
+
+    def write_hls_init(self, data: bytes) -> None:
+        """Write initialization segment data.
+
+        Args:
+            data: Init segment bytes.
+        """
+        if self._hls_segment_dumper is not None:
+            self._hls_segment_dumper.write_init(data)
+
+    def finalize_hls_pipeline(self) -> None:
+        """Finalize and clean up the HLS pipeline."""
+        if self._hls_segment_dumper is not None:
+            self._hls_segment_dumper.close()
+            self._hls_segment_dumper = None
+
+        self._hls_playlist_dumper = None
+        self._hls_analyser = None
+        self._hls_resolver = None
+        self._hls_fetcher = None
+        logger.debug("HLS pipeline finalized")
+
+    @property
+    def hls_segment_dumper(self) -> SegmentDumper | None:
+        """Get the current HLS segment dumper."""
+        return self._hls_segment_dumper
+
+    @property
+    def hls_analyser(self) -> HlsAnalyser | None:
+        """Get the current HLS analyser."""
+        return self._hls_analyser
+
+    @property
+    def hls_fetcher(self) -> SegmentFetcher | None:
+        """Get the current HLS segment fetcher."""
+        return self._hls_fetcher
