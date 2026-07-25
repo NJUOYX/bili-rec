@@ -41,7 +41,13 @@ class SegmentDumper:
         return self._segment_count
 
     def open(self) -> None:
-        """Open the output file for writing."""
+        """Open the output file for writing.
+
+        Raises:
+            RuntimeError: If the dumper is already open.
+        """
+        if self._file is not None:
+            raise RuntimeError("SegmentDumper is already open")
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self._path, "wb")  # noqa: SIM115
         self._bytes_written = 0

@@ -98,7 +98,7 @@ class SegmentFetcher:
         )
 
     async def fetch_init(self, uri: str) -> bytes:
-        """Download an initialization segment.
+        """Download an initialization segment with retry.
 
         Args:
             uri: URI of the init segment.
@@ -107,18 +107,33 @@ class SegmentFetcher:
             Raw bytes of the init segment.
 
         Raises:
-            SegmentFetchError: If download fails.
+            SegmentFetchError: If download fails after retries.
         """
         url = self._resolve_url(uri)
-        try:
-            async with self._session.get(url, timeout=self._timeout) as resp:
-                if resp.status != 200:
-                    raise SegmentFetchError(uri, f"HTTP {resp.status}")
-                return await resp.read()
-        except SegmentFetchError:
-            raise
-        except Exception as e:
-            raise SegmentFetchError(uri, str(e)) from e
+        last_error: Exception | None = None
+
+        for attempt in range(self._max_retries):
+            try:
+                async with self._session.get(url, timeout=self._timeout) as resp:
+                    if resp.status != 200:
+                        raise SegmentFetchError(uri, f"HTTP {resp.status}")
+                    return await resp.read()
+            except SegmentFetchError:
+                raise
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "Init segment fetch attempt %d/%d failed for %s: %s",
+                    attempt + 1,
+                    self._max_retries,
+                    uri,
+                    e,
+                )
+
+        raise SegmentFetchError(
+            uri,
+            f"failed after {self._max_retries} retries: {last_error}",
+        )
 
     @staticmethod
     def verify_crc(data: bytes, expected_crc: int) -> None:
