@@ -54,8 +54,10 @@ class Prober:
         try:
             result = await asyncio.create_subprocess_exec(
                 self._ffprobe_path,
-                "-v", "quiet",
-                "-print_format", "json",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
                 "-show_streams",
                 "-show_format",
                 str(path),

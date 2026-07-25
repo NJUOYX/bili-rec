@@ -10,7 +10,7 @@ class TestBitsReader:
     """Tests for BitsReader."""
 
     def test_read_bits(self) -> None:
-        reader = BitsReader(b"\xAB")  # 10101011
+        reader = BitsReader(b"\xab")  # 10101011
         assert reader.read_bits(4) == 0b1010
         assert reader.read_bits(4) == 0b1011
 
@@ -30,7 +30,7 @@ class TestBitsReader:
         assert reader.read_se() == 0
 
     def test_bits_remaining(self) -> None:
-        reader = BitsReader(b"\xFF\xFF")
+        reader = BitsReader(b"\xff\xff")
         assert reader.bits_remaining == 16
         reader.read_bits(4)
         assert reader.bits_remaining == 12
@@ -74,12 +74,36 @@ class TestSPS:
     def test_sps_resolution(self) -> None:
         # Minimal SPS for 1920x1080 (simplified)
         # This is a real SPS from a 1920x1080 stream
-        sps_data = bytes([
-            0x67, 0x64, 0x00, 0x28, 0xAC, 0xD9, 0x40, 0x78,
-            0x02, 0x27, 0xE5, 0x84, 0x00, 0x00, 0x03, 0x00,
-            0x04, 0x00, 0x00, 0x03, 0x00, 0xF0, 0x3C, 0x60,
-            0xC6, 0x58,
-        ])
+        sps_data = bytes(
+            [
+                0x67,
+                0x64,
+                0x00,
+                0x28,
+                0xAC,
+                0xD9,
+                0x40,
+                0x78,
+                0x02,
+                0x27,
+                0xE5,
+                0x84,
+                0x00,
+                0x00,
+                0x03,
+                0x00,
+                0x04,
+                0x00,
+                0x00,
+                0x03,
+                0x00,
+                0xF0,
+                0x3C,
+                0x60,
+                0xC6,
+                0x58,
+            ]
+        )
         sps = avc.parse_sps(sps_data)
         assert sps.width == 1920
         assert sps.height == 1080
@@ -113,13 +137,40 @@ class TestExtractResolution:
 
     def test_extract_from_sps(self) -> None:
         # SPS NALU with start code
-        data = bytes([
-            0x00, 0x00, 0x00, 0x01,  # Start code
-            0x67, 0x64, 0x00, 0x28, 0xAC, 0xD9, 0x40, 0x78,
-            0x02, 0x27, 0xE5, 0x84, 0x00, 0x00, 0x03, 0x00,
-            0x04, 0x00, 0x00, 0x03, 0x00, 0xF0, 0x3C, 0x60,
-            0xC6, 0x58,
-        ])
+        data = bytes(
+            [
+                0x00,
+                0x00,
+                0x00,
+                0x01,  # Start code
+                0x67,
+                0x64,
+                0x00,
+                0x28,
+                0xAC,
+                0xD9,
+                0x40,
+                0x78,
+                0x02,
+                0x27,
+                0xE5,
+                0x84,
+                0x00,
+                0x00,
+                0x03,
+                0x00,
+                0x04,
+                0x00,
+                0x00,
+                0x03,
+                0x00,
+                0xF0,
+                0x3C,
+                0x60,
+                0xC6,
+                0x58,
+            ]
+        )
         resolution = avc.extract_resolution(data)
         assert resolution is not None
         assert resolution.width == 1920

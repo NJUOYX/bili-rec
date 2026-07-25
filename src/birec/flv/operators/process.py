@@ -47,11 +47,13 @@ def process(
         if sort_tags:
             pipeline.append(sort())
 
-        pipeline.extend([
-            correct(),
-            fix(jump_threshold=jump_threshold),
-            concat(),
-        ])
+        pipeline.extend(
+            [
+                correct(),
+                fix(jump_threshold=jump_threshold),
+                concat(),
+            ]
+        )
 
         # Apply pipeline
         result = source
