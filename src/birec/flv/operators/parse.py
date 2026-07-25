@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from io import RawIOBase
 
 from reactivex import Observable
 from reactivex.abc import ObserverBase, SchedulerBase
@@ -14,6 +13,7 @@ from ..common import create_avc_end_sequence_tag, is_video_tag
 from ..exceptions import FlvDataError, FlvStreamCorruptedError
 from ..format import FlvParser
 from ..models import FlvHeader, FlvTag
+from ..struct_io import RandomIO
 from .typing import FLVStream, FLVStreamItem
 
 __all__ = ("parse",)
@@ -27,7 +27,7 @@ def parse(
     complete_on_eof: bool = True,
     backup_timestamp: bool = False,
     restore_timestamp: bool = False,
-) -> Callable[[Observable[RawIOBase]], FLVStream]:
+) -> Callable[[Observable[RandomIO]], FLVStream]:
     """Create a parse operator that converts raw IO to FLVStream.
 
     Args:
@@ -37,10 +37,10 @@ def parse(
         restore_timestamp: If True, restore timestamp from stream_id.
 
     Returns:
-        An operator function that transforms Observable[RawIOBase] to FLVStream.
+        An operator function that transforms Observable[RandomIO] to FLVStream.
     """
 
-    def operator(source: Observable[RawIOBase]) -> FLVStream:
+    def operator(source: Observable[RandomIO]) -> FLVStream:
         def subscribe(
             observer: ObserverBase[FLVStreamItem],
             scheduler: SchedulerBase | None = None,
@@ -50,7 +50,7 @@ def parse(
             last_tag: FlvTag | None = None
             disposed = False
 
-            def on_next(stream: RawIOBase) -> None:
+            def on_next(stream: RandomIO) -> None:
                 nonlocal parser, header, last_tag
 
                 if disposed:

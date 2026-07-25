@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from io import BytesIO
+from pathlib import Path
 
 import aiohttp
+from reactivex.disposable import CompositeDisposable, Disposable
+from reactivex.subject import Subject
 
 from ..bili.live import Live
+from ..flv.operators import Dumper, ProgressBar, dump, parse, process, progress
+from ..flv.operators.typing import FLVStream
+from ..flv.struct_io import RandomIO
 from .cover_downloader import CoverDownloader
 from .danmaku_dumper import DanmakuDumper
 from .danmaku_receiver import DanmakuReceiver
@@ -50,6 +58,12 @@ class StreamRecorder:
         self._raw_danmaku_receiver: RawDanmakuReceiver | None = None
         self._raw_danmaku_dumper: RawDanmakuDumper | None = None
         self._cover_downloader: CoverDownloader | None = None
+        # FLV pipeline state
+        self._flv_dumper: Dumper | None = None
+        self._flv_progress: ProgressBar | None = None
+        self._flv_subscription: Disposable | None = None
+        self._flv_disposables: CompositeDisposable | None = None
+        self._flv_source: Subject[RandomIO] | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -127,6 +141,9 @@ class StreamRecorder:
         self._is_recording = False
         self._statistics.stop()
 
+        # Finalize FLV pipeline
+        self._finalize_flv_pipeline()
+
         # Finalize danmaku
         if self._danmaku_dumper:
             self._danmaku_dumper.finalize()
@@ -148,6 +165,82 @@ class StreamRecorder:
         if self._cover_downloader and self._current_video_path:
             cover_path = self._path_provider.cover_path(self._current_video_path)
             await self._cover_downloader.download(cover_url, cover_path)
+
+    def create_flv_pipeline(
+        self,
+        output_path: Path,
+        *,
+        sort_tags: bool = True,
+        progress_callback: Callable[[ProgressBar], None] | None = None,
+    ) -> FLVStream:
+        """Create an FLV processing pipeline for recording.
+
+        Creates: parse → process → progress → dump pipeline.
+
+        Args:
+            output_path: Path for the output FLV file.
+            sort_tags: Whether to sort tags within GOP.
+            progress_callback: Optional progress callback.
+
+        Returns:
+            The processed FLVStream ready for subscription.
+        """
+        self._flv_dumper = Dumper(output_path)
+        self._flv_progress = ProgressBar()
+
+        # Build a source subject for feeding raw IO data
+        source: Subject[RandomIO] = Subject()
+        self._flv_source = source
+
+        # Build pipeline: parse → process → progress → dump
+        parsed = parse()(source)
+        processed = process(sort_tags=sort_tags)(parsed)
+
+        # Add progress tracking
+        if progress_callback is not None:
+            processed = progress(callback=progress_callback)(processed)
+
+        # Add dump
+        processed = dump(output_path)(processed)
+
+        self._flv_disposables = CompositeDisposable()
+        return processed
+
+    def feed_flv_data(self, data: bytes) -> None:
+        """Feed raw FLV bytes into the pipeline.
+
+        Wraps data in BytesIO and pushes to the parse stage.
+        """
+        if self._flv_source is not None:
+            stream = BytesIO(data)
+            self._flv_source.on_next(stream)
+
+    def complete_flv_pipeline(self) -> None:
+        """Signal completion of the FLV data stream."""
+        if self._flv_source is not None:
+            self._flv_source.on_completed()
+
+    def _finalize_flv_pipeline(self) -> None:
+        """Finalize and clean up the FLV pipeline."""
+        if self._flv_disposables is not None:
+            self._flv_disposables.dispose()
+            self._flv_disposables = None
+
+        if self._flv_subscription is not None:
+            self._flv_subscription.dispose()
+            self._flv_subscription = None
+
+        if self._flv_dumper is not None:
+            self._flv_dumper.close()
+            self._flv_dumper = None
+
+        self._flv_progress = None
+        self._flv_source = None
+
+    @property
+    def flv_progress(self) -> ProgressBar | None:
+        """Get the current FLV progress tracker."""
+        return self._flv_progress
 
     def format_size(self, size: int) -> str:
         """Format byte size to human-readable string."""
