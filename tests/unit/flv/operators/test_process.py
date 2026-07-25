@@ -18,7 +18,9 @@ class TestProcess:
         """Test basic processing pipeline."""
         tags = [
             make_video_tag(timestamp=0, frame_type=FrameType.KEY_FRAME, body=b"\x01"),
-            make_video_tag(timestamp=100, frame_type=FrameType.INNER_FRAME, body=b"\x02"),
+            make_video_tag(
+                timestamp=100, frame_type=FrameType.INNER_FRAME, body=b"\x02"
+            ),
             make_video_tag(timestamp=200, frame_type=FrameType.KEY_FRAME, body=b"\x03"),
         ]
 
