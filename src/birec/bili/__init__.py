@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .api import AppApi, WebApi
+from .danmaku_client import DanmakuClient, DanmakuClientListener
 from .exceptions import (
     ApiRequestError,
     DanmakuClientAuthError,
@@ -27,6 +28,8 @@ from .helpers import (
     request_qrcode,
     room_init,
 )
+from .live import Live
+from .live_monitor import LiveMonitor, LiveMonitorListener
 from .models import LiveStatus, RoomInfo, UserInfo
 from .net import get_connector, timeout
 from .typing import (
@@ -45,8 +48,13 @@ __all__ = (
     "ApiRequestError",
     "AppApi",
     "Danmaku",
+    "DanmakuClient",
     "DanmakuClientAuthError",
+    "DanmakuClientListener",
     "JsonResponse",
+    "Live",
+    "LiveMonitor",
+    "LiveMonitorListener",
     "LiveRoomEncrypted",
     "LiveRoomHidden",
     "LiveRoomLocked",
