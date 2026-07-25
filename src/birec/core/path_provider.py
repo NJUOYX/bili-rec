@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..bili.models import RoomInfo, UserInfo
 
@@ -19,7 +19,7 @@ _TEMPLATE_VAR_RE = re.compile(
 )
 
 # UTC+8 timezone
-UTC8 = timezone(offset=__import__("datetime").timedelta(hours=8))
+UTC8 = timezone(offset=timedelta(hours=8))
 
 
 def escape_path(name: str) -> str:

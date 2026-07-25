@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlparse
 
 from ...bili.live import Live
 
@@ -38,8 +39,6 @@ class StreamURLResolver:
             quality_number=quality_number,  # type: ignore[arg-type]
         )
         # Extract host from URL for tracking
-        from urllib.parse import urlparse
-
         parsed = urlparse(url)
         self._last_host = parsed.hostname or ""
         return url
@@ -57,8 +56,6 @@ class StreamURLResolver:
             quality_number=quality_number,  # type: ignore[arg-type]
             exclude_host=self._last_host,
         )
-        from urllib.parse import urlparse
-
         parsed = urlparse(url)
         self._last_host = parsed.hostname or ""
         return url

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -65,8 +66,6 @@ class CoverDownloader(AsyncStoppableMixin, EventEmitter[CoverDownloaderListener]
         """
         if not url:
             return False
-
-        import asyncio
 
         for attempt in range(self._max_retries):
             try:
