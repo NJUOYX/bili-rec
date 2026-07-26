@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.scripts]
-birec = "birec.cli.main:app"
+birec = "birec.cli:app"
 
 [project.optional-dependencies]
 dev = [
