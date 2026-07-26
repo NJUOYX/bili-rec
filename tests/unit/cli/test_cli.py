@@ -7,6 +7,9 @@ from typer.testing import CliRunner
 
 from birec.application import Application, create_application
 from birec.cli import app
+from birec.event import EventCenter
+from birec.exception import ExceptionCenter
+from birec.setting.models import Settings
 
 
 class TestCli:
@@ -58,3 +61,58 @@ class TestApplication:
         )
         assert fastapi_app is not None
         assert hasattr(fastapi_app.state, "application")
+
+    def test_loads_settings_on_construction(self, tmp_path) -> None:
+        app_instance = Application(
+            config_path=tmp_path / "config.toml",
+            output_dir=tmp_path / "out",
+            log_dir=tmp_path / "log",
+        )
+        assert isinstance(app_instance.settings_manager.settings, Settings)
+        assert app_instance.settings_manager.settings.version == "1.0"
+
+    def test_env_overlay_aligns_output_and_log_dirs(self, tmp_path) -> None:
+        app_instance = Application(
+            config_path=tmp_path / "config.toml",
+            output_dir=tmp_path / "out",
+            log_dir=tmp_path / "log",
+        )
+        settings = app_instance.settings_manager.settings
+        assert settings.output.out_dir == str(tmp_path / "out")
+        assert settings.logging.log_dir == str(tmp_path / "log")
+
+    @pytest.mark.asyncio
+    async def test_shutdown_dumps_settings(self, tmp_path) -> None:
+        config_path = tmp_path / "config.toml"
+        app_instance = Application(
+            config_path=config_path,
+            output_dir=tmp_path / "out",
+            log_dir=tmp_path / "log",
+        )
+        assert not config_path.exists()
+
+        await app_instance.startup()
+        await app_instance.shutdown()
+
+        assert config_path.is_file()
+        assert "version" in config_path.read_text(encoding="utf8")
+
+    def test_create_application_mounts_components(self, tmp_path) -> None:
+        fastapi_app = create_application(
+            config_path=tmp_path / "config.toml",
+            output_dir=tmp_path / "out",
+            log_dir=tmp_path / "log",
+        )
+        state = fastapi_app.state
+        assert isinstance(state.settings_manager.settings, Settings)
+        assert isinstance(state.event_center, EventCenter)
+        assert isinstance(state.exception_center, ExceptionCenter)
+
+    def test_event_and_exception_centers_are_singletons(self, tmp_path) -> None:
+        app_instance = Application(
+            config_path=tmp_path / "config.toml",
+            output_dir=tmp_path / "out",
+            log_dir=tmp_path / "log",
+        )
+        assert app_instance.event_center is EventCenter.get_instance()
+        assert app_instance.exception_center is ExceptionCenter.get_instance()
