@@ -22,6 +22,15 @@ class TestCli:
         assert result.exit_code == 0
         assert "bili-rec" in result.output or "birec" in result.output
 
+    def test_console_script_entry_point_loads(self) -> None:
+        from importlib.metadata import entry_points
+
+        scripts = entry_points(group="console_scripts", name="birec")
+        entry_point = next(iter(scripts), None)
+        assert entry_point is not None, "birec console script is not installed"
+        assert entry_point.value == "birec.cli:app"
+        assert entry_point.load() is app
+
 
 class TestApplication:
     @pytest.mark.asyncio
