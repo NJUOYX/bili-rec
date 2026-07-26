@@ -1,0 +1,73 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "bili-rec",
+    "description": "Bilibili live-stream recorder API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/app/info": {
+      "get": {
+        "summary": "Get App Info",
+        "description": "Get application info.",
+        "operationId": "get_app_info_api_v1_app_info_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get App Info Api V1 App Info Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/data": {
+      "get": {
+        "summary": "Get Tasks Data",
+        "description": "Get all tasks data.",
+        "operationId": "get_tasks_data_api_v1_tasks_data_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Tasks Data Api V1 Tasks Data Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "summary": "Get Settings",
+        "description": "Get current settings.",
+        "operationId": "get_settings_api_v1_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Settings Api V1 Settings Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
