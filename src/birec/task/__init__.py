@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from ..bili.live_monitor import LiveMonitor
     from ..core.recorder import Recorder
     from ..postprocess.postprocessor import Postprocessor
+    from ..space import SpaceMonitor, SpaceReclaimer
 
 __all__ = (
     "RunningStatus",
@@ -268,13 +269,38 @@ class RecordTaskManager:
     def __init__(
         self,
         task_factory: Callable[[int], RecordTask] | None = None,
+        *,
+        space_monitor: SpaceMonitor | None = None,
+        space_reclaimer: SpaceReclaimer | None = None,
     ) -> None:
         self._tasks: dict[int, RecordTask] = {}
         self._task_factory = task_factory
+        self._space_monitor = space_monitor
+        self._space_reclaimer = space_reclaimer
 
     @property
     def task_count(self) -> int:
         return len(self._tasks)
+
+    @property
+    def space_monitor(self) -> SpaceMonitor | None:
+        return self._space_monitor
+
+    @property
+    def space_reclaimer(self) -> SpaceReclaimer | None:
+        return self._space_reclaimer
+
+    async def start(self) -> None:
+        """Start background services (disk-space monitoring)."""
+        if self._space_monitor is not None:
+            await self._space_monitor.start()
+
+    async def stop(self) -> None:
+        """Stop background services and destroy all tasks."""
+        if self._space_monitor is not None:
+            await self._space_monitor.stop()
+        for room_id in list(self._tasks):
+            await self.remove_task(room_id)
 
     def get_task(self, room_id: int) -> RecordTask | None:
         """Get a task by room ID."""

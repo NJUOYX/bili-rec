@@ -298,6 +298,50 @@ class TestRecordTaskManager:
         assert mgr.task_count == 4
 
 
+class TestRecordTaskManagerSpace:
+    async def test_start_starts_space_monitor(self) -> None:
+        space_monitor = MagicMock()
+        space_monitor.start = AsyncMock()
+        mgr = RecordTaskManager(
+            lambda rid: _make_task(room_id=rid)[0], space_monitor=space_monitor
+        )
+        await mgr.start()
+        space_monitor.start.assert_awaited_once()
+
+    async def test_start_without_monitor_is_noop(self) -> None:
+        mgr = RecordTaskManager(lambda rid: _make_task(room_id=rid)[0])
+        await mgr.start()  # should not raise
+        assert mgr.space_monitor is None
+
+    async def test_stop_stops_monitor_and_destroys_tasks(self) -> None:
+        created: dict[int, RecordTask] = {}
+        space_monitor = MagicMock()
+        space_monitor.stop = AsyncMock()
+
+        def factory(room_id: int) -> RecordTask:
+            task, _ = _make_task(room_id=room_id)
+            task.setup = AsyncMock()  # type: ignore[method-assign]
+            task.destroy = AsyncMock()  # type: ignore[method-assign]
+            created[room_id] = task
+            return task
+
+        mgr = RecordTaskManager(factory, space_monitor=space_monitor)
+        await mgr.add_task(1)
+        await mgr.add_task(2)
+
+        await mgr.stop()
+
+        space_monitor.stop.assert_awaited_once()
+        assert mgr.task_count == 0
+        created[1].destroy.assert_awaited_once()  # type: ignore[attr-defined]
+        created[2].destroy.assert_awaited_once()  # type: ignore[attr-defined]
+
+    def test_space_reclaimer_property(self) -> None:
+        reclaimer = MagicMock()
+        mgr = RecordTaskManager(space_reclaimer=reclaimer)
+        assert mgr.space_reclaimer is reclaimer
+
+
 class TestEventDrivenRecording:
     """Acceptance: event-driven auto start/stop of recording via the monitor."""
 
