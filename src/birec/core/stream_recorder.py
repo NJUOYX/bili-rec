@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Literal
@@ -14,6 +16,7 @@ from reactivex.disposable import CompositeDisposable
 from reactivex.subject import Subject
 
 from ..bili.live import Live
+from ..bili.typing import QualityNumber, StreamFormat
 from ..flv.operators import Dumper, ProgressBar, dump, parse, process, progress
 from ..flv.operators.typing import FLVStream, FLVStreamItem
 from ..flv.struct_io import RandomIO
@@ -80,6 +83,10 @@ class StreamRecorder:
         self._hls_fetcher: SegmentFetcher | None = None
         # Active pipeline tracking ("flv" / "hls" / None)
         self._active_pipeline: Literal["flv", "hls"] | None = None
+        # Real stream tracking (effective format/quality once data flows)
+        self._real_stream_format: StreamFormat | None = None
+        self._real_quality_number: QualityNumber | None = None
+        self._stream_available_time: datetime | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -101,6 +108,83 @@ class StreamRecorder:
     def active_pipeline(self) -> Literal["flv", "hls"] | None:
         """The currently active recording pipeline, if any."""
         return self._active_pipeline
+
+    @property
+    def real_stream_format(self) -> StreamFormat | None:
+        """The effective stream format once data starts flowing."""
+        return self._real_stream_format
+
+    @property
+    def real_quality_number(self) -> QualityNumber | None:
+        """The effective quality number once data starts flowing."""
+        return self._real_quality_number
+
+    @property
+    def stream_available_time(self) -> datetime | None:
+        """When the stream first became available for this recording."""
+        return self._stream_available_time
+
+    def mark_stream_available(
+        self,
+        *,
+        stream_format: StreamFormat,
+        quality_number: QualityNumber | None = None,
+    ) -> None:
+        """Record the real stream format/quality and first-available time.
+
+        The available time is only set once so that hot-swapping pipelines
+        preserves the original stream-available timestamp.
+        """
+        self._real_stream_format = stream_format
+        if quality_number is not None:
+            self._real_quality_number = quality_number
+        if self._stream_available_time is None:
+            self._stream_available_time = datetime.now(UTC)
+
+    def resolve_stream_format(
+        self,
+        *,
+        flv_available: bool,
+        fmp4_available: bool,
+    ) -> StreamFormat:
+        """Pick the effective stream format from the preferred one with fallback.
+
+        Rules (design §5.4):
+        - preferred flv: use flv when available, otherwise fall back to fmp4;
+        - preferred fmp4: use fmp4 when available, otherwise fall back to flv.
+        """
+        preferred = self._stream_params.stream_format
+        if preferred == "flv":
+            return "flv" if flv_available else "fmp4"
+        return "fmp4" if fmp4_available else "flv"
+
+    async def wait_for_fmp4_stream(
+        self,
+        is_available: Callable[[], Awaitable[bool]],
+        *,
+        timeout: float,
+        interval: float = 1.0,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> bool:
+        """Poll until an fMP4 stream becomes available or the timeout expires.
+
+        Implements the "fmp4_stream_timeout" rule: when fMP4 is preferred but
+        not yet available, wait up to ``timeout`` seconds for it before the
+        caller falls back to FLV. ``sleep`` is injectable for deterministic
+        testing.
+
+        Returns:
+            True if the stream became available within ``timeout`` seconds,
+            False otherwise.
+        """
+        elapsed = 0.0
+        while True:
+            if await is_available():
+                return True
+            if elapsed >= timeout:
+                return False
+            await sleep(interval)
+            elapsed += interval
 
     def setup_danmaku(
         self,
@@ -150,6 +234,9 @@ class StreamRecorder:
         self._statistics.reset()
         self._statistics.start()
         self._active_pipeline = None
+        self._real_stream_format = None
+        self._real_quality_number = None
+        self._stream_available_time = None
         self._is_recording = True
 
         logger.info("Recording started: %s", video_path)
