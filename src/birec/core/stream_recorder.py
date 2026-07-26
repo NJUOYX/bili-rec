@@ -6,14 +6,16 @@ import logging
 from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
+from typing import Literal
 
 import aiohttp
-from reactivex.disposable import CompositeDisposable, Disposable
+from reactivex.abc import DisposableBase
+from reactivex.disposable import CompositeDisposable
 from reactivex.subject import Subject
 
 from ..bili.live import Live
 from ..flv.operators import Dumper, ProgressBar, dump, parse, process, progress
-from ..flv.operators.typing import FLVStream
+from ..flv.operators.typing import FLVStream, FLVStreamItem
 from ..flv.struct_io import RandomIO
 from ..hls.models import HlsPlaylist, HlsSegment
 from ..hls.operators.analyse import HlsAnalyser
@@ -67,7 +69,7 @@ class StreamRecorder:
         # FLV pipeline state
         self._flv_dumper: Dumper | None = None
         self._flv_progress: ProgressBar | None = None
-        self._flv_subscription: Disposable | None = None
+        self._flv_subscription: DisposableBase | None = None
         self._flv_disposables: CompositeDisposable | None = None
         self._flv_source: Subject[RandomIO] | None = None
         # HLS pipeline state
@@ -76,6 +78,8 @@ class StreamRecorder:
         self._hls_analyser: HlsAnalyser | None = None
         self._hls_resolver: PlaylistResolver | None = None
         self._hls_fetcher: SegmentFetcher | None = None
+        # Active pipeline tracking ("flv" / "hls" / None)
+        self._active_pipeline: Literal["flv", "hls"] | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -92,6 +96,11 @@ class StreamRecorder:
     @property
     def stream_params(self) -> StreamParamHolder:
         return self._stream_params
+
+    @property
+    def active_pipeline(self) -> Literal["flv", "hls"] | None:
+        """The currently active recording pipeline, if any."""
+        return self._active_pipeline
 
     def setup_danmaku(
         self,
@@ -140,6 +149,7 @@ class StreamRecorder:
 
         self._statistics.reset()
         self._statistics.start()
+        self._active_pipeline = None
         self._is_recording = True
 
         logger.info("Recording started: %s", video_path)
@@ -153,8 +163,11 @@ class StreamRecorder:
         self._is_recording = False
         self._statistics.stop()
 
-        # Finalize FLV pipeline
+        # Finalize whichever pipeline(s) are active. Both finalizers are safe
+        # to call unconditionally (no-op when the pipeline was never created).
         self._finalize_flv_pipeline()
+        self.finalize_hls_pipeline()
+        self._active_pipeline = None
 
         # Finalize danmaku
         if self._danmaku_dumper:
@@ -215,7 +228,23 @@ class StreamRecorder:
         # Add dump
         processed = dump(output_path)(processed)
 
+        self._active_pipeline = "flv"
+
+        # Subscribe internally so that feed_flv_data drives the live pipeline
+        # (parse -> process -> dump) without the caller managing subscriptions.
+        def _on_next(_: FLVStreamItem) -> None:
+            return None
+
+        def _on_error(error: Exception) -> None:
+            logger.error("FLV pipeline error: %s", error)
+
+        subscription = processed.subscribe(
+            on_next=_on_next,
+            on_error=_on_error,
+        )
+        self._flv_subscription = subscription
         self._flv_disposables = CompositeDisposable()
+        self._flv_disposables.add(subscription)
         return processed
 
     def feed_flv_data(self, data: bytes) -> None:
@@ -288,6 +317,7 @@ class StreamRecorder:
         self._hls_analyser = HlsAnalyser()
         self._hls_resolver = PlaylistResolver()
         self._hls_fetcher = SegmentFetcher(self._session, base_url)
+        self._active_pipeline = "hls"
         logger.debug("HLS pipeline created: %s", output_path)
 
     def feed_hls_playlist(self, playlist: HlsPlaylist) -> list[HlsSegment]:
