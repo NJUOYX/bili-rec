@@ -1,10 +1,19 @@
-"""Task management: RecordTask, RecordTaskManager, and models."""
+"""Task management: RecordTask orchestration and RecordTaskManager."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..bili.danmaku_client import DanmakuClient
+    from ..bili.live import Live
+    from ..bili.live_monitor import LiveMonitor
+    from ..core.recorder import Recorder
+    from ..postprocess.postprocessor import Postprocessor
 
 __all__ = (
     "RunningStatus",
@@ -97,23 +106,54 @@ class DanmakuFileDetail:
 
 
 class RecordTask:
-    """A single room recording task.
+    """Orchestrates monitoring, recording, and post-processing for one room.
 
-    Combines monitoring, recording, and post-processing for one room.
+    Composes the Bilibili adapter (``Live``/``DanmakuClient``/``LiveMonitor``),
+    the ``Recorder`` and the ``Postprocessor``. The monitor watches for live
+    events; when the recorder is enabled the ``Recorder`` is registered as a
+    monitor listener so recording starts/stops automatically on live events.
     """
 
-    def __init__(self, room_id: int) -> None:
+    def __init__(
+        self,
+        room_id: int,
+        live: Live,
+        danmaku_client: DanmakuClient,
+        monitor: LiveMonitor,
+        recorder: Recorder,
+        postprocessor: Postprocessor,
+        *,
+        enable_monitor: bool = True,
+        enable_recorder: bool = True,
+    ) -> None:
         self._room_id = room_id
-        self._monitor_enabled = False
-        self._recorder_enabled = False
-        self._running_status = RunningStatus.STOPPED
-        self._data = TaskData(room_id=room_id)
-        self._video_files: list[VideoFileDetail] = []
-        self._danmaku_files: list[DanmakuFileDetail] = []
+        self._live = live
+        self._danmaku_client = danmaku_client
+        self._monitor = monitor
+        self._recorder = recorder
+        self._postprocessor = postprocessor
+        self._monitor_enabled = enable_monitor
+        self._recorder_enabled = enable_recorder
 
     @property
     def room_id(self) -> int:
         return self._room_id
+
+    @property
+    def live(self) -> Live:
+        return self._live
+
+    @property
+    def monitor(self) -> LiveMonitor:
+        return self._monitor
+
+    @property
+    def recorder(self) -> Recorder:
+        return self._recorder
+
+    @property
+    def postprocessor(self) -> Postprocessor:
+        return self._postprocessor
 
     @property
     def monitor_enabled(self) -> bool:
@@ -125,61 +165,112 @@ class RecordTask:
 
     @property
     def running_status(self) -> RunningStatus:
-        return self._running_status
+        """Derive the running status from the underlying components."""
+        if self._recorder.is_recording:
+            return RunningStatus.RECORDING
+        if self._postprocessor.is_running:
+            return RunningStatus.REMUXING
+        if self._monitor_enabled and self._monitor.is_living:
+            return RunningStatus.WAITING
+        return RunningStatus.STOPPED
 
-    @property
-    def data(self) -> TaskData:
-        return self._data
+    # ── lifecycle ────────────────────────────────────────────────────────
 
-    @property
-    def video_files(self) -> list[VideoFileDetail]:
-        return self._video_files.copy()
+    async def setup(self) -> None:
+        """Start monitoring (if enabled) and reconcile recorder registration."""
+        if self._monitor_enabled:
+            await self._start_monitoring()
+        if not self._recorder_enabled:
+            self._monitor.remove_listener(self._recorder)
 
-    @property
-    def danmaku_files(self) -> list[DanmakuFileDetail]:
-        return self._danmaku_files.copy()
+    async def destroy(self) -> None:
+        """Tear down all components for this task."""
+        self._monitor.disable()
+        self._monitor.remove_listener(self._recorder)
+        await self._danmaku_client.stop()
+        await self._recorder.stop()
 
-    def enable_monitor(self) -> None:
-        """Enable live monitoring."""
+    # ── monitor control ──────────────────────────────────────────────────
+
+    async def enable_monitor(self) -> None:
+        """Enable live monitoring (starts the danmaku client + monitor)."""
+        if self._monitor_enabled:
+            return
         self._monitor_enabled = True
+        await self._start_monitoring()
         logger.debug("Monitor enabled for room %d", self._room_id)
 
-    def disable_monitor(self) -> None:
-        """Disable live monitoring."""
+    async def disable_monitor(self) -> None:
+        """Disable live monitoring (stops the monitor + danmaku client)."""
+        if not self._monitor_enabled:
+            return
         self._monitor_enabled = False
+        self._monitor.disable()
+        await self._danmaku_client.stop()
         logger.debug("Monitor disabled for room %d", self._room_id)
 
+    async def _start_monitoring(self) -> None:
+        await self._danmaku_client.start()
+        self._monitor.enable()
+
+    # ── recorder control ─────────────────────────────────────────────────
+
     def enable_recorder(self) -> None:
-        """Enable recording."""
+        """Enable recording by registering the recorder as a monitor listener."""
+        if self._recorder_enabled:
+            return
         self._recorder_enabled = True
+        self._monitor.add_listener(self._recorder)
         logger.debug("Recorder enabled for room %d", self._room_id)
 
     def disable_recorder(self) -> None:
-        """Disable recording."""
+        """Disable recording by removing the recorder from the monitor."""
+        if not self._recorder_enabled:
+            return
         self._recorder_enabled = False
+        self._monitor.remove_listener(self._recorder)
         logger.debug("Recorder disabled for room %d", self._room_id)
 
-    def update_data(self, data: TaskData) -> None:
-        """Update task data."""
-        self._data = data
+    # ── data ─────────────────────────────────────────────────────────────
 
-    def add_video_file(self, detail: VideoFileDetail) -> None:
-        """Add a video file detail."""
-        self._video_files.append(detail)
-
-    def add_danmaku_file(self, detail: DanmakuFileDetail) -> None:
-        """Add a danmaku file detail."""
-        self._danmaku_files.append(detail)
+    def get_data(self) -> TaskData:
+        """Build a snapshot of the task data for API responses."""
+        room_info = self._live.room_info
+        user_info = self._live.user_info
+        stream_recorder = self._recorder.stream_recorder
+        status = TaskStatus(
+            monitor_enabled=self._monitor_enabled,
+            recorder_enabled=self._recorder_enabled,
+            running_status=self.running_status,
+            recording_path=stream_recorder.current_video_path,
+            real_stream_format=stream_recorder.real_stream_format or "",
+            real_quality_number=stream_recorder.real_quality_number or 0,
+        )
+        return TaskData(
+            room_id=self._room_id,
+            user_name=user_info.name if user_info else "",
+            room_title=room_info.title if room_info else "",
+            area=room_info.area_name if room_info else "",
+            parent_area=room_info.parent_area_name if room_info else "",
+            live_status=self._monitor.is_living,
+            task_status=status,
+        )
 
 
 class RecordTaskManager:
     """Manages multiple record tasks.
 
-    Provides add/remove/start/stop/query operations for tasks.
+    Tasks are created through an injected factory so the manager stays
+    decoupled from component construction (and is easy to test). Provides
+    add/remove/start/stop/query operations.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        task_factory: Callable[[int], RecordTask] | None = None,
+    ) -> None:
         self._tasks: dict[int, RecordTask] = {}
+        self._task_factory = task_factory
 
     @property
     def task_count(self) -> int:
@@ -189,59 +280,70 @@ class RecordTaskManager:
         """Get a task by room ID."""
         return self._tasks.get(room_id)
 
-    def add_task(self, room_id: int) -> RecordTask:
-        """Add a new task.
-
-        Args:
-            room_id: Room ID to add.
-
-        Returns:
-            The created RecordTask.
-
-        Raises:
-            ValueError: If task already exists.
-        """
-        if room_id in self._tasks:
-            raise ValueError(f"Task for room {room_id} already exists")
-        task = RecordTask(room_id)
-        self._tasks[room_id] = task
-        logger.info("Added task for room %d", room_id)
-        return task
-
-    def remove_task(self, room_id: int) -> None:
-        """Remove a task.
-
-        Args:
-            room_id: Room ID to remove.
-
-        Raises:
-            KeyError: If task does not exist.
-        """
-        if room_id not in self._tasks:
-            raise KeyError(f"No task for room {room_id}")
-        del self._tasks[room_id]
-        logger.info("Removed task for room %d", room_id)
-
     def get_all_tasks(self) -> list[RecordTask]:
         """Get all tasks."""
         return list(self._tasks.values())
 
-    def enable_all_monitors(self) -> None:
-        """Enable monitoring for all tasks."""
-        for task in self._tasks.values():
-            task.enable_monitor()
+    async def add_task(self, room_id: int) -> RecordTask:
+        """Create, set up, and register a new task.
 
-    def disable_all_monitors(self) -> None:
-        """Disable monitoring for all tasks."""
-        for task in self._tasks.values():
-            task.disable_monitor()
+        Raises:
+            ValueError: If a task for the room already exists.
+            RuntimeError: If no task factory was configured.
+        """
+        if room_id in self._tasks:
+            raise ValueError(f"Task for room {room_id} already exists")
+        if self._task_factory is None:
+            raise RuntimeError("No task factory configured")
+        task = self._task_factory(room_id)
+        await task.setup()
+        self._tasks[room_id] = task
+        logger.info("Added task for room %d", room_id)
+        return task
 
-    def enable_all_recorders(self) -> None:
-        """Enable recording for all tasks."""
-        for task in self._tasks.values():
-            task.enable_recorder()
+    async def remove_task(self, room_id: int) -> None:
+        """Destroy and remove a task.
 
-    def disable_all_recorders(self) -> None:
-        """Disable recording for all tasks."""
-        for task in self._tasks.values():
-            task.disable_recorder()
+        Raises:
+            KeyError: If no task exists for the room.
+        """
+        task = self._get_or_raise(room_id)
+        await task.destroy()
+        del self._tasks[room_id]
+        logger.info("Removed task for room %d", room_id)
+
+    async def start_task(self, room_id: int) -> None:
+        """Enable monitoring for a task."""
+        await self._get_or_raise(room_id).enable_monitor()
+
+    async def stop_task(self, room_id: int) -> None:
+        """Disable monitoring for a task."""
+        await self._get_or_raise(room_id).disable_monitor()
+
+    def enable_recorder(self, room_id: int) -> None:
+        """Enable recording for a task."""
+        self._get_or_raise(room_id).enable_recorder()
+
+    def disable_recorder(self, room_id: int) -> None:
+        """Disable recording for a task."""
+        self._get_or_raise(room_id).disable_recorder()
+
+    def get_task_data(self, room_id: int) -> TaskData:
+        """Get the task data snapshot for a room."""
+        return self._get_or_raise(room_id).get_data()
+
+    def get_all_task_data(self) -> list[TaskData]:
+        """Get task data snapshots for all rooms."""
+        return [task.get_data() for task in self._tasks.values()]
+
+    async def load_tasks(self, room_ids: list[int]) -> None:
+        """Add tasks for any of the given room IDs not already present."""
+        for room_id in room_ids:
+            if room_id not in self._tasks:
+                await self.add_task(room_id)
+
+    def _get_or_raise(self, room_id: int) -> RecordTask:
+        task = self._tasks.get(room_id)
+        if task is None:
+            raise KeyError(f"No task for room {room_id}")
+        return task
