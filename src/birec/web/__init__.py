@@ -8,10 +8,16 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .middleware import BaseHrefMiddleware, RouteRedirectMiddleware
 from .models import ResponseMessage
-from .routers import tasks_router
+from .routers import tasks_router, ws_router
 
-__all__ = ("create_app", "ResponseMessage")
+__all__ = (
+    "BaseHrefMiddleware",
+    "ResponseMessage",
+    "RouteRedirectMiddleware",
+    "create_app",
+)
 
 
 def create_app() -> FastAPI:
@@ -77,3 +83,6 @@ def _register_routes(app: FastAPI) -> None:
 
     # Task routes (modular router)
     app.include_router(tasks_router)
+
+    # WebSocket routes
+    app.include_router(ws_router)
