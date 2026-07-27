@@ -1,73 +1,1119 @@
 {
-  "openapi": "3.1.0",
-  "info": {
-    "title": "bili-rec",
-    "description": "Bilibili live-stream recorder API",
-    "version": "0.1.0"
-  },
-  "paths": {
-    "/api/v1/app/info": {
-      "get": {
-        "summary": "Get App Info",
-        "description": "Get application info.",
-        "operationId": "get_app_info_api_v1_app_info_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Get App Info Api V1 App Info Get"
-                }
-              }
-            }
-          }
-        }
-      }
+    "openapi": "3.1.0",
+    "info": {
+        "title": "bili-rec",
+        "description": "Bilibili live-stream recorder API",
+        "version": "0.1.0"
     },
-    "/api/v1/tasks/data": {
-      "get": {
-        "summary": "Get Tasks Data",
-        "description": "Get all tasks data.",
-        "operationId": "get_tasks_data_api_v1_tasks_data_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Get Tasks Data Api V1 Tasks Data Get"
+    "paths": {
+        "/api/v1/app/info": {
+            "get": {
+                "summary": "Get App Info",
+                "description": "Get application info.",
+                "operationId": "get_app_info_api_v1_app_info_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Get App Info Api V1 App Info Get"
+                                }
+                            }
+                        }
+                    }
                 }
-              }
             }
-          }
+        },
+        "/api/v1/settings": {
+            "get": {
+                "summary": "Get Settings",
+                "description": "Get current settings.",
+                "operationId": "get_settings_api_v1_settings_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Get Settings Api V1 Settings Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/data": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Get Tasks Data",
+                "description": "Get paginated task data with optional filtering.",
+                "operationId": "get_tasks_data_api_v1_tasks_data_get",
+                "parameters": [
+                    {
+                        "name": "page",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 1,
+                            "title": "Page"
+                        }
+                    },
+                    {
+                        "name": "size",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 100,
+                            "minimum": 1,
+                            "default": 20,
+                            "title": "Size"
+                        }
+                    },
+                    {
+                        "name": "select",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Select"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Get Tasks Data Api V1 Tasks Data Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/info": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Batch Refresh Info",
+                "description": "Refresh info for all tasks.",
+                "operationId": "batch_refresh_info_api_v1_tasks_info_post",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Batch Refresh Info Api V1 Tasks Info Post"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/start": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Batch Start",
+                "description": "Start monitoring for specified or all tasks.",
+                "operationId": "batch_start_api_v1_tasks_start_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "anyOf": [
+                                    {
+                                        "$ref": "#/components/schemas/BatchRoomIds"
+                                    },
+                                    {
+                                        "type": "null"
+                                    }
+                                ],
+                                "title": "Body"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Batch Start Api V1 Tasks Start Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/stop": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Batch Stop",
+                "description": "Stop monitoring for specified or all tasks.",
+                "operationId": "batch_stop_api_v1_tasks_stop_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "anyOf": [
+                                    {
+                                        "$ref": "#/components/schemas/BatchStopRequest"
+                                    },
+                                    {
+                                        "type": "null"
+                                    }
+                                ],
+                                "title": "Body"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Batch Stop Api V1 Tasks Stop Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/recorder/enable": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Batch Enable Recorder",
+                "description": "Enable recorder for specified or all tasks.",
+                "operationId": "batch_enable_recorder_api_v1_tasks_recorder_enable_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "anyOf": [
+                                    {
+                                        "$ref": "#/components/schemas/BatchRoomIds"
+                                    },
+                                    {
+                                        "type": "null"
+                                    }
+                                ],
+                                "title": "Body"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Batch Enable Recorder Api V1 Tasks Recorder Enable Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/recorder/disable": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Batch Disable Recorder",
+                "description": "Disable recorder for specified or all tasks.",
+                "operationId": "batch_disable_recorder_api_v1_tasks_recorder_disable_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "anyOf": [
+                                    {
+                                        "$ref": "#/components/schemas/BatchRoomIds"
+                                    },
+                                    {
+                                        "type": "null"
+                                    }
+                                ],
+                                "title": "Body"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Batch Disable Recorder Api V1 Tasks Recorder Disable Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks": {
+            "delete": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Delete Tasks",
+                "description": "Delete multiple tasks.",
+                "operationId": "delete_tasks_api_v1_tasks_delete",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/DeleteTasksRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Delete Tasks Api V1 Tasks Delete"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/data": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Get Task Data",
+                "description": "Get data for a single task.",
+                "operationId": "get_task_data_api_v1_tasks__room_id__data_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Get Task Data Api V1 Tasks  Room Id  Data Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/param": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Get Task Param",
+                "description": "Get task parameters.",
+                "operationId": "get_task_param_api_v1_tasks__room_id__param_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Get Task Param Api V1 Tasks  Room Id  Param Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/metadata": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Get Task Metadata",
+                "description": "Get recording metadata for a task.",
+                "operationId": "get_task_metadata_api_v1_tasks__room_id__metadata_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Get Task Metadata Api V1 Tasks  Room Id  Metadata Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/profile": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Get Task Profile",
+                "description": "Get current stream ffprobe profile.",
+                "operationId": "get_task_profile_api_v1_tasks__room_id__profile_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Get Task Profile Api V1 Tasks  Room Id  Profile Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/videos": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Get Task Videos",
+                "description": "Get video file details for a task.",
+                "operationId": "get_task_videos_api_v1_tasks__room_id__videos_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Get Task Videos Api V1 Tasks  Room Id  Videos Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/danmakus": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Get Task Danmakus",
+                "description": "Get danmaku file details for a task.",
+                "operationId": "get_task_danmakus_api_v1_tasks__room_id__danmakus_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Get Task Danmakus Api V1 Tasks  Room Id  Danmakus Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/info": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Refresh Task Info",
+                "description": "Refresh info for a single task.",
+                "operationId": "refresh_task_info_api_v1_tasks__room_id__info_post",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Refresh Task Info Api V1 Tasks  Room Id  Info Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/start": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Start Task",
+                "description": "Start monitoring for a task.",
+                "operationId": "start_task_api_v1_tasks__room_id__start_post",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Start Task Api V1 Tasks  Room Id  Start Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/stop": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Stop Task",
+                "description": "Stop monitoring for a task.",
+                "operationId": "stop_task_api_v1_tasks__room_id__stop_post",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Stop Task Api V1 Tasks  Room Id  Stop Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/recorder/enable": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Enable Recorder",
+                "description": "Enable recorder for a task.",
+                "operationId": "enable_recorder_api_v1_tasks__room_id__recorder_enable_post",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Enable Recorder Api V1 Tasks  Room Id  Recorder Enable Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}/recorder/disable": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Disable Recorder",
+                "description": "Disable recorder for a task.",
+                "operationId": "disable_recorder_api_v1_tasks__room_id__recorder_disable_post",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Disable Recorder Api V1 Tasks  Room Id  Recorder Disable Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tasks/{room_id}": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Add Task",
+                "description": "Add a new task for a room.",
+                "operationId": "add_task_api_v1_tasks__room_id__post",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AddTaskRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Add Task Api V1 Tasks  Room Id  Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Delete Task",
+                "description": "Delete a single task.",
+                "operationId": "delete_task_api_v1_tasks__room_id__delete",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Delete Task Api V1 Tasks  Room Id  Delete"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-      }
     },
-    "/api/v1/settings": {
-      "get": {
-        "summary": "Get Settings",
-        "description": "Get current settings.",
-        "operationId": "get_settings_api_v1_settings_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Get Settings Api V1 Settings Get"
-                }
-              }
+    "components": {
+        "schemas": {
+            "AddTaskRequest": {
+                "properties": {
+                    "room_id": {
+                        "type": "integer",
+                        "title": "Room Id"
+                    },
+                    "auto_enable": {
+                        "type": "boolean",
+                        "title": "Auto Enable",
+                        "default": true
+                    },
+                    "save": {
+                        "type": "boolean",
+                        "title": "Save",
+                        "default": false
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "room_id"
+                ],
+                "title": "AddTaskRequest",
+                "description": "Request body for adding a task."
+            },
+            "BatchRoomIds": {
+                "properties": {
+                    "room_ids": {
+                        "items": {
+                            "type": "integer"
+                        },
+                        "type": "array",
+                        "title": "Room Ids",
+                        "default": []
+                    }
+                },
+                "type": "object",
+                "title": "BatchRoomIds",
+                "description": "Request body for batch operations on specific rooms."
+            },
+            "BatchStopRequest": {
+                "properties": {
+                    "room_ids": {
+                        "items": {
+                            "type": "integer"
+                        },
+                        "type": "array",
+                        "title": "Room Ids",
+                        "default": []
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "title": "Force",
+                        "default": false
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "title": "Background",
+                        "default": false
+                    }
+                },
+                "type": "object",
+                "title": "BatchStopRequest",
+                "description": "Request body for batch stop with options."
+            },
+            "DeleteTasksRequest": {
+                "properties": {
+                    "room_ids": {
+                        "items": {
+                            "type": "integer"
+                        },
+                        "type": "array",
+                        "title": "Room Ids"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "room_ids"
+                ],
+                "title": "DeleteTasksRequest",
+                "description": "Request body for batch delete."
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    },
+                    "input": {
+                        "title": "Input"
+                    },
+                    "ctx": {
+                        "type": "object",
+                        "title": "Context"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
             }
-          }
         }
-      }
     }
-  }
 }

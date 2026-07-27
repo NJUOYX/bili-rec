@@ -21,6 +21,8 @@ __all__ = (
     "FileStatus",
     "TaskStatus",
     "TaskData",
+    "TaskParam",
+    "TaskMetadata",
     "VideoFileDetail",
     "DanmakuFileDetail",
     "RecordTask",
@@ -104,6 +106,32 @@ class DanmakuFileDetail:
     path: str
     size: int = 0
     status: FileStatus = FileStatus.UNKNOWN
+
+
+@dataclass(frozen=True, slots=True)
+class TaskParam:
+    """Task parameters (configuration snapshot)."""
+
+    room_id: int
+    enable_monitor: bool = True
+    enable_recorder: bool = True
+    out_dir: str = ""
+    path_template: str = ""
+    stream_format: str = "flv"
+    quality_number: int = 10000
+
+
+@dataclass(frozen=True, slots=True)
+class TaskMetadata:
+    """Recording metadata for a task."""
+
+    room_id: int
+    user_name: str = ""
+    room_title: str = ""
+    area: str = ""
+    parent_area: str = ""
+    live_start_time: int = 0
+    cover_url: str = ""
 
 
 class RecordTask:
@@ -257,6 +285,47 @@ class RecordTask:
             task_status=status,
         )
 
+    def get_param(self) -> TaskParam:
+        """Get task parameters (configuration snapshot)."""
+        return TaskParam(
+            room_id=self._room_id,
+            enable_monitor=self._monitor_enabled,
+            enable_recorder=self._recorder_enabled,
+        )
+
+    def get_metadata(self) -> TaskMetadata:
+        """Get recording metadata."""
+        room_info = self._live.room_info
+        user_info = self._live.user_info
+        return TaskMetadata(
+            room_id=self._room_id,
+            user_name=user_info.name if user_info else "",
+            room_title=room_info.title if room_info else "",
+            area=room_info.area_name if room_info else "",
+            parent_area=room_info.parent_area_name if room_info else "",
+            live_start_time=room_info.live_start_time if room_info else 0,
+            cover_url=room_info.cover if room_info else "",
+        )
+
+    def get_profile(self) -> dict[str, object]:
+        """Get current stream ffprobe profile (empty if not recording)."""
+        return {}
+
+    def get_videos(self) -> list[VideoFileDetail]:
+        """Get video file details."""
+        path = self._recorder.stream_recorder.current_video_path
+        if path:
+            return [VideoFileDetail(path=path, status=FileStatus.RECORDING)]
+        return []
+
+    def get_danmakus(self) -> list[DanmakuFileDetail]:
+        """Get danmaku file details."""
+        return []
+
+    async def refresh_info(self) -> None:
+        """Refresh room/user info from the API."""
+        await self._live.init()
+
 
 class RecordTaskManager:
     """Manages multiple record tasks.
@@ -367,6 +436,11 @@ class RecordTaskManager:
         for room_id in room_ids:
             if room_id not in self._tasks:
                 await self.add_task(room_id)
+
+    async def batch_refresh_info(self) -> None:
+        """Refresh info for all tasks."""
+        for task in self._tasks.values():
+            await task.refresh_info()
 
     def _get_or_raise(self, room_id: int) -> RecordTask:
         task = self._tasks.get(room_id)

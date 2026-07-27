@@ -2,29 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .models import ResponseMessage
+from .routers import tasks_router
+
 __all__ = ("create_app", "ResponseMessage")
-
-
-@dataclass(frozen=True, slots=True)
-class ResponseMessage:
-    """Unified API response body."""
-
-    code: int = 0
-    message: str = ""
-    data: dict[str, Any] | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        result: dict[str, Any] = {"code": self.code, "message": self.message}
-        if self.data is not None:
-            result["data"] = self.data
-        return result
 
 
 def create_app() -> FastAPI:
@@ -83,12 +70,10 @@ def _register_routes(app: FastAPI) -> None:
         """Get application info."""
         return ResponseMessage(data={"version": "0.1.0", "name": "bili-rec"}).to_dict()
 
-    @app.get("/api/v1/tasks/data")
-    async def get_tasks_data() -> dict[str, Any]:
-        """Get all tasks data."""
-        return ResponseMessage(data={"tasks": []}).to_dict()
-
     @app.get("/api/v1/settings")
     async def get_settings() -> dict[str, Any]:
         """Get current settings."""
         return ResponseMessage(data={}).to_dict()
+
+    # Task routes (modular router)
+    app.include_router(tasks_router)

@@ -5,12 +5,14 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from birec.task import RecordTaskManager
 from birec.web import ResponseMessage, create_app
 
 
 @pytest.fixture
 def client() -> TestClient:
     app = create_app()
+    app.state.task_manager = RecordTaskManager()
     return TestClient(app)
 
 
@@ -48,6 +50,7 @@ class TestTasksRoute:
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 0
+        assert body["data"]["total"] == 0
         assert body["data"]["tasks"] == []
 
 

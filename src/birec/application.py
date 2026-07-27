@@ -13,6 +13,7 @@ from birec.event import EventCenter
 from birec.exception import ExceptionCenter
 from birec.setting.env import EnvSettings
 from birec.setting.setting_manager import SettingsManager
+from birec.task import RecordTaskManager
 from birec.web import create_app
 
 __all__ = ("create_application", "Application")
@@ -45,6 +46,7 @@ class Application:
             log_dir=str(log_dir),
         )
         self._settings_manager = SettingsManager.load_with_env(env)
+        self._task_manager = RecordTaskManager()
 
     @property
     def is_started(self) -> bool:
@@ -61,6 +63,10 @@ class Application:
     @property
     def exception_center(self) -> ExceptionCenter:
         return ExceptionCenter.get_instance()
+
+    @property
+    def task_manager(self) -> RecordTaskManager:
+        return self._task_manager
 
     async def startup(self) -> None:
         """Initialize application components."""
@@ -105,5 +111,6 @@ def create_application(
     app.state.settings_manager = application.settings_manager
     app.state.event_center = application.event_center
     app.state.exception_center = application.exception_center
+    app.state.task_manager = application.task_manager
 
     return app
