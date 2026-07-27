@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from .middleware import BaseHrefMiddleware, RouteRedirectMiddleware
 from .models import ResponseMessage
-from .routers import tasks_router, ws_router
+from .routers import app_router, settings_router, tasks_router, ws_router
 
 __all__ = (
     "BaseHrefMiddleware",
@@ -70,16 +70,11 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
 def _register_routes(app: FastAPI) -> None:
     """Register API routes."""
+    # Settings routes (§7.2)
+    app.include_router(settings_router)
 
-    @app.get("/api/v1/app/info")
-    async def get_app_info() -> dict[str, Any]:
-        """Get application info."""
-        return ResponseMessage(data={"version": "0.1.0", "name": "bili-rec"}).to_dict()
-
-    @app.get("/api/v1/settings")
-    async def get_settings() -> dict[str, Any]:
-        """Get current settings."""
-        return ResponseMessage(data={}).to_dict()
+    # App/login/validation/update routes (§7.3)
+    app.include_router(app_router)
 
     # Task routes (modular router)
     app.include_router(tasks_router)

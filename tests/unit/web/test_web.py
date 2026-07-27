@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
+from birec.application import Application
 from birec.task import RecordTaskManager
 from birec.web import ResponseMessage, create_app
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(tmp_path: Path) -> TestClient:
     app = create_app()
     app.state.task_manager = RecordTaskManager()
+    application = Application(
+        tmp_path / "config.toml",
+        tmp_path / "recordings",
+        tmp_path / "logs",
+    )
+    app.state.application = application
+    app.state.settings_manager = application.settings_manager
     return TestClient(app)
 
 
