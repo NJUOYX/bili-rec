@@ -81,6 +81,7 @@ markers = [
     "unit: developer unit tests",
     "component: developer component/pipeline tests",
     "system: system/end-to-end tests",
+    "realbili: real Bilibili live-room verification (network, opt-in via BIREC_REALBILI=1)",
     "ffmpeg: tests that require a real ffmpeg binary",
     "slow: slow-running tests",
 ]

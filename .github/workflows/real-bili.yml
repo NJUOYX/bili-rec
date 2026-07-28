@@ -1,0 +1,36 @@
+name: Real Bilibili Verification
+
+# Standalone, advisory verification against the live Bilibili service. It is
+# never part of the PR quality gate (which runs -m "unit or component"); it runs
+# on a schedule and on demand, and failures only warn (continue-on-error).
+
+on:
+  schedule:
+    # Every 6 hours; a 24/7 room is expected to be live at these times.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      room_id:
+        description: "Optional fixed room id (sets BIREC_TEST_ROOM_ID)"
+        required: false
+        default: ""
+
+jobs:
+  realbili:
+    runs-on: ubuntu-latest
+    # Advisory only: a red run must not gate anything.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - name: Run real Bilibili verification tests
+        continue-on-error: true
+        env:
+          BIREC_REALBILI: "1"
+          BIREC_TEST_ROOM_ID: ${{ github.event.inputs.room_id }}
+          BIREC_BILI_COOKIE: ${{ secrets.BIREC_BILI_COOKIE }}
+        run: uv run pytest -m realbili -v
