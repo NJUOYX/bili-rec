@@ -4,7 +4,7 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 | 0.1 |
+| 版本 | 0.2 |
 | 状态 | **进行中（前端开发阶段已启动）** |
 | 最近更新 | 2026-07-28 |
 
@@ -204,7 +204,8 @@ WebSocket 事件不直接渲染业务数据，而是作为**缓存失效/局部�
 
 | 路由 | 页面 | 后端端点 |
 |---|---|---|
-| `/` → `/tasks` | 任务列表（卡片/表格 + 筛选 + 批量操作） | `GET /tasks/data`、批量 `start`/`stop`/`recorder/*`、`DELETE /tasks` |
+| `/` → `/dashboard` | 概览仪表盘（统计卡片 + 最近事件 + 录制中快捷卡片，见 §14.5） | `GET /app/status`、`GET /tasks/data`、`WS /ws/v1/events` |
+| `/tasks` | 任务列表（卡片网格为主 + 筛选 + 批量操作，见 §14.6） | `GET /tasks/data`、批量 `start`/`stop`/`recorder/*`、`DELETE /tasks` |
 | `/tasks/new` | 添加任务（房号，支持短号） | `POST /tasks/{room_id}` |
 | `/tasks/:roomId` | 任务详情（状态/参数/元数据/Profile/视频/弹幕 + 单任务操作） | `GET /tasks/{room_id}/{data,param,metadata,profile,videos,danmakus}`、单任务 `start`/`stop`/`recorder/*`、`DELETE` |
 | `/settings` | 全局设置（分组见 §8.1） | `GET/PATCH /settings` |
@@ -218,8 +219,8 @@ BiliApi、Header、Danmaku、Recorder、Output、Postprocessing、Logging、Spac
 
 ### 8.2 布局与通用组件
 
-- 布局：左侧导航（任务/设置/关于）+ 顶栏（实时连接指示灯、应用状态、全局操作）。
-- 通用组件：`TaskCard`、`StatusBadge`（monitor/recorder/running_status）、`RateGauge`（速率）、`ProgressBar`（后处理进度）、`QrcodeLogin`、`EventLogPanel`、`SettingsForm`。
+- 布局：左侧导航（概览/任务/设置/登录/关于，可折叠）+ 顶栏（实时连接指示灯、主题切换、添加任务、应用状态/重启/退出）。详见 §14.4。
+- 通用组件：`TaskCard`、`StatusBadge`（monitor/recorder/running_status）、`RateGauge`（速率）、`RateSparkline`（速率曲线）、`ProgressBar`（后处理进度）、`StatCard`（概览统计）、`ConnectionIndicator`（实时连接）、`ThemeToggle`（主题切换）、`QrcodeLogin`、`EventLogPanel`、`SettingsForm`。
 
 ---
 
@@ -322,11 +323,83 @@ jobs:
 
 ---
 
-## 14. 待细化事项（TODO，随实现推进补充）
+## 14. UI 视觉设计规范
 
-- UI 组件库最终确认（Ant Design 5 vs Mantine）与主题定制范围。
-- 速率曲线是否首版引入图表库。
-- 任务列表大数据量下的虚拟滚动/分页策略。
+> 基于 §8 已定的信息架构，仅做视觉与体验升级，不改动页面/路由骨架。设计基准为 blrec 原版（Angular + ng-zorro-antd，同 Ant Design 血统），在保留操作熟悉感的同时定制现代主题。
+
+### 14.1 设计基调
+
+- **定制现代主题**：在 Ant Design 5 的 design-token 架构上定制，气质从「默认后台」提升为「精致产品」——品牌主色、更大圆角、柔和多层阴影、更充裕留白。
+- **品牌识别**：主色采用 Bilibili 标志性粉 `#FB7299`，强化直播录制工具的品牌关联。
+- **双主题**：亮/暗双主题，跟随系统并可手动切换（§14.3）。
+
+### 14.2 主题令牌（`ConfigProvider` theme）
+
+| Token | 亮色 | 暗色 | 说明 |
+|---|---|---|---|
+| `colorPrimary` | `#FB7299` | `#FF85AB`（略提亮） | B站粉主色 |
+| `borderRadius` | `8`（卡片 `12`） | 同 | 大圆角、柔和 |
+| `colorBgLayout` | `#F5F6F8` | `#0F0F0F` | 内容区背景 |
+| `colorBgContainer` | `#FFFFFF` | `#1A1A1A` | 卡片/表单底色 |
+| `boxShadow` | 柔和多层阴影 | 弱化处理 | 卡片层次/悬浮 |
+| `controlHeight` | `36` | 同 | 更大控件与内边距，呼吸感 |
+| `fontFamily` | `Inter, "PingFang SC", "HarmonyOS Sans", system-ui, sans-serif` | 同 | 现代无衬线字体栈 |
+
+- token 集中定义于 `app/theme.ts`，由 `providers.tsx` 的 `ConfigProvider` 注入；暗色叠加 `theme.darkAlgorithm`。
+- 语义色（成功/警告/错误/信息）沿用 AntD 默认，仅在状态徽章处强化对比。
+
+### 14.3 深色模式
+
+- **三态**：`system` / `light` / `dark`，持久化于 `localStorage`，运行态存 Zustand（§3 主题 store）。
+- `system` 态监听 `matchMedia('(prefers-color-scheme: dark)')` 的 `change` 事件实时切换。
+- 顶栏提供主题切换控件（图标：跟随系统 / 太阳 / 月亮）。
+
+### 14.4 布局与导航
+
+- **左侧导航**（可折叠为图标栏）：顶部 logo；导航项 `概览 / 任务 / 设置 / 登录 / 关于`。
+- **顶栏**：左侧页面标题/面包屑；右侧依次为 实时连接指示灯（绿=已连 / 黄=重连中 / 红=断开 + 文案，见 §7.3）、主题切换、`+ 添加任务`、更多菜单（应用状态 / 重启 / 退出）。
+- **响应式**：`md` 以下左侧导航收起为抽屉（Drawer）；顶栏操作收敛进溢出菜单。
+
+### 14.5 Dashboard 概览页（新增，路由 `/` → `/dashboard`）
+
+blrec 原版无总览页；新增以「一眼掌握全局」：
+
+- **统计卡片行**：录制中 / 监控中 / 总任务数；磁盘可用（进度环，来源 `GET /app/status` 与 Space 设置）；总下载速率 + 总录制速率（带 sparkline 迷你曲线）。
+- **最近事件时间线**：复用 `EventLogPanel` 紧凑态，订阅 `/ws/v1/events`。
+- **录制中快捷卡片**：正在录制的任务缩略卡，点击进详情。
+- 数据来源以 `/tasks/data`（聚合）与 WS 事件为主；速率汇总在前端按任务累加。
+- 交付节奏：随 FM3 任务模块一并落地（依赖任务数据与 WS 层）。
+
+### 14.6 任务卡片网格（`/tasks` 首页核心，卡片网格为主）
+
+响应式网格（`xxl:4 / xl:3 / md:2 / xs:1` 列），每张 `TaskCard`：
+
+- **封面缩略图**（16:9）+ 左上角直播状态角标（直播中/闲置/轮播）；封面随 `CoverImageDownloadedEvent` 更新，缺失时用分区占位图。
+- 主播头像 + 昵称、房间标题、房号、分区。
+- **状态行**：`StatusBadge`（监控 / 录制器 / 运行态，颜色语义化）；录制中显示 `RateGauge`（下载/录制速率）与后处理 `ProgressBar`。
+- **操作区**：启停（主按钮）、录制器开关、切割、更多菜单（详情 / 设置 / 删除）。
+- **状态区分**：hover 抬升阴影；**录制中卡片**以主色微光/呼吸描边强化，一眼可辨。
+- 展示字段以 `/tasks/data` 的 `TaskData`（`room_info` / `user_info` / `task_status`）为准；接入类型（FM1/FM3）时核对 `openapi.json`，缺失字段做降级。
+- **大数据量**：任务数多时对网格启用虚拟化/分页（策略见 §15）。
+
+### 14.7 其余页面视觉要点
+
+- **任务详情**（`/tasks/:roomId`）：顶部信息头（封面/主播/状态大图）+ 标签页（状态·参数·元数据·Profile·视频·弹幕），主操作区固定于信息头。
+- **设置**（`/settings`）：左侧分组锚点（§8.1 各分组）+ 右侧表单卡片；任务级设置留空=回退全局，用 placeholder 呈现继承值。
+- **扫码登录**（`/login`）：居中卡片，二维码 + 轮询状态动效（待扫描 / 已扫描 / 已确认 / 过期）。
+
+### 14.8 动效与微交互
+
+- 加载用骨架屏（卡片/表格/表单各自骨架）；启停/开关用乐观更新 + 失败回滚。
+- 状态切换、卡片 hover、主题切换均加克制过渡（≤200ms），不喧宾夺主。
+- 尊重 `prefers-reduced-motion`，关闭非必要动画。
+
+---
+
+## 15. 待细化事项（TODO，随实现推进补充）
+
+- 速率曲线的图表实现：Dashboard sparkline 与卡片速率曲线是否引入图表库（如 `@ant-design/plots`）或自绘 SVG。
+- 任务卡片网格大数据量下的虚拟滚动/分页策略。
 - 前端产物与后端镜像的集成方式最终形态（内嵌 wheel vs 运行时卷挂载）。
 - i18n 结构是否预留。
 
@@ -338,3 +411,4 @@ jobs:
 |---|---|---|
 | 0.0 | 2026-07-24 | 创建占位文档，明确前端阶段延后。 |
 | 0.1 | 2026-07-28 | 启动前端设计：确立技术栈（React 19 + Vite 7 + TS）、契约驱动类型生成（openapi-typescript/openapi-fetch）、状态管理（TanStack Query + Zustand）、WebSocket 实时对接策略、页面/路由结构、DT/ST 测试与覆盖率门禁、CI/CD 与部署集成、前端里程碑规划。 |
+| 0.2 | 2026-07-28 | 新增 §14 UI 视觉设计规范：定制现代主题（B站粉 #FB7299、大圆角、柔和阴影、更多留白）、亮/暗双主题跟随系统、新增 Dashboard 概览页、任务卡片网格为主；相应更新 §8 路由/布局/通用组件；原 §14 TODO 顺延为 §15 并解决 UI 组件库选型项。 |
