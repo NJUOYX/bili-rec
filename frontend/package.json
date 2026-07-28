@@ -23,6 +23,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.101.4",
+    "openapi-fetch": "^0.17.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
@@ -40,6 +42,7 @@
     "eslint-plugin-react-refresh": "^0.4.16",
     "globals": "^15.14.0",
     "jsdom": "^25.0.1",
+    "msw": "^2.15.0",
     "openapi-typescript": "^7.4.4",
     "prettier": "^3.4.2",
     "tsx": "^4.19.2",
