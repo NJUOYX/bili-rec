@@ -19,6 +19,7 @@
     "sync:openapi": "cp ../docs/design/openapi.json ./openapi.json && pnpm gen:api",
     "check:openapi": "tsx scripts/check-openapi-drift.ts",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
   },
   "dependencies": {

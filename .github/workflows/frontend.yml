@@ -1,0 +1,57 @@
+name: Frontend CI
+
+# 仅当前端代码或后端契约变更时触发（见 frontend-design.md §11.1）。
+on:
+  push:
+    paths:
+      - "frontend/**"
+      - "docs/design/openapi.json"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "docs/design/openapi.json"
+      - ".github/workflows/frontend.yml"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Check OpenAPI drift (契约漂移)
+        run: pnpm check:openapi
+
+      - name: Generate API types (无漂移)
+        run: |
+          pnpm gen:api
+          git diff --exit-code -- src/api/schema.d.ts
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test + coverage (硬门禁)
+        run: pnpm test:coverage
+
+      - name: Build
+        run: pnpm build
