@@ -1,13 +1,21 @@
 import { render, screen } from '@testing-library/react'
 import App from '../../src/App'
+import { useRealtime } from '../../src/ws/useRealtime'
 
-// M27 冒烟测试：验证测试栈（Vitest + jsdom + RTL）可用，
-// 应用外壳能渲染出标题。功能测试随后续里程碑补充。
+// 隔离 WS 副作用：App 装配测试只验证「渲染外壳 + 接线 useRealtime」，
+// 实时层行为由 tests/unit/ws/ 各测试专门覆盖。
+vi.mock('../../src/ws/useRealtime', () => ({ useRealtime: vi.fn() }))
+
 describe('App', () => {
   it('渲染应用标题', () => {
     render(<App />)
     expect(
       screen.getByRole('heading', { level: 1, name: 'bili-rec' }),
     ).toBeTruthy()
+  })
+
+  it('挂载即接线实时推送（useRealtime，§7.3）', () => {
+    render(<App />)
+    expect(vi.mocked(useRealtime)).toHaveBeenCalled()
   })
 })
