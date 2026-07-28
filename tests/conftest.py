@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-_MARKER_BY_DIR = {"unit": "unit", "component": "component", "system": "system"}
+_MARKER_BY_DIR = {
+    "unit": "unit",
+    "component": "component",
+    "system": "system",
+    "realbili": "realbili",
+}
 
 
 def pytest_collection_modifyitems(
