@@ -113,9 +113,16 @@ function defaultBaseUrl(): string {
   return typeof window === 'undefined' ? '' : window.location.origin
 }
 
-/** 创建类型安全客户端；`baseUrl` 可注入以便测试或反向代理场景。 */
+/**
+ * 创建类型安全客户端；`baseUrl` 可注入以便测试或反向代理场景。
+ * fetch 惰性绑定到 globalThis：避免模块加载期捕获旧引用，
+ * 使运行期补丁（MSW 拦截器等）对单例客户端同样生效。
+ */
 export function createApiClient(baseUrl: string = defaultBaseUrl()) {
-  return createClient<paths>({ baseUrl })
+  return createClient<paths>({
+    baseUrl,
+    fetch: (request) => globalThis.fetch(request),
+  })
 }
 
 /** 应用级单例客户端。 */
