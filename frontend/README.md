@@ -12,11 +12,11 @@ pnpm dev        # 开发服务器（/api、/ws 代理到本地后端 :2233，可
 
 ## 常用脚本
 
-| 脚本 | 说明 |
-|---|---|
-| `pnpm dev` | 开发服务器（HMR） |
-| `pnpm build` | 类型检查 + 生产构建（输出 `dist/`） |
-| `pnpm preview` | 预览生产构建 |
-| `pnpm typecheck` | `tsc -b` 类型检查 |
+| 脚本             | 说明                                |
+| ---------------- | ----------------------------------- |
+| `pnpm dev`       | 开发服务器（HMR）                   |
+| `pnpm build`     | 类型检查 + 生产构建（输出 `dist/`） |
+| `pnpm preview`   | 预览生产构建                        |
+| `pnpm typecheck` | `tsc -b` 类型检查                   |
 
 > 工具链：Node ≥ 20.19，pnpm（`packageManager` 已锁定）。
