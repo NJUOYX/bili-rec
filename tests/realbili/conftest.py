@@ -14,6 +14,7 @@ from pathlib import Path
 import aiohttp
 import pytest
 
+from birec.bili.live import Live
 from birec.bili.net import get_connector, timeout
 
 from .live_room import discover_live_room
@@ -65,3 +66,17 @@ async def live_room_id(bili_session: aiohttp.ClientSession) -> int:
     if room_id is None:
         pytest.skip("no live Bilibili room available for verification")
     return room_id
+
+
+@pytest.fixture
+async def live(
+    bili_session: aiohttp.ClientSession,
+    bili_cookie: str,
+    live_room_id: int,
+) -> Live:
+    """A refreshed ``Live`` bound to a currently-live room."""
+    obj = Live(live_room_id, session=bili_session)
+    if bili_cookie:
+        obj.cookie = bili_cookie
+    await obj.refresh()
+    return obj
