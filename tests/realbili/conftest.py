@@ -15,7 +15,7 @@ import aiohttp
 import pytest
 
 from birec.bili.live import Live
-from birec.bili.net import get_connector, timeout
+from birec.bili.net import timeout
 
 from .live_room import discover_live_room
 
@@ -47,12 +47,14 @@ def bili_cookie() -> str:
 
 @pytest.fixture
 async def bili_session() -> AsyncIterator[aiohttp.ClientSession]:
-    """A shared aiohttp session backed by the birec connector."""
-    session = aiohttp.ClientSession(
-        connector=get_connector(),
-        connector_owner=False,
-        timeout=timeout,
-    )
+    """A per-test aiohttp session bound to the running event loop.
+
+    A fresh session (and its own connector) is created per test rather than
+    reusing ``birec.bili.net.get_connector`` — that shared connector is a module
+    singleton bound to the loop of the first test, which breaks once pytest's
+    per-test event loop is torn down.
+    """
+    session = aiohttp.ClientSession(timeout=timeout)
     try:
         yield session
     finally:
