@@ -22,7 +22,10 @@ function normalize(value: unknown): unknown {
     return Object.fromEntries(
       Object.keys(value as Record<string, unknown>)
         .sort()
-        .map((key) => [key, normalize((value as Record<string, unknown>)[key])]),
+        .map((key) => [
+          key,
+          normalize((value as Record<string, unknown>)[key]),
+        ]),
     )
   }
   return value
@@ -43,4 +46,6 @@ if (local !== backend) {
   process.exit(1)
 }
 
-console.log('✓ 契约一致：frontend/openapi.json 与 docs/design/openapi.json 相同。')
+console.log(
+  '✓ 契约一致：frontend/openapi.json 与 docs/design/openapi.json 相同。',
+)
