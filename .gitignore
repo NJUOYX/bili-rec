@@ -34,3 +34,6 @@ htmlcov/
 
 # Reference-only symlink to blrec (read-only, not part of this repo)
 /blrec
+
+# Local tooling / sandbox temp (not committed)
+.tmp/
