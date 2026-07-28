@@ -14,7 +14,10 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "gen:api": "openapi-typescript ./openapi.json -o src/api/schema.d.ts",
+    "sync:openapi": "cp ../docs/design/openapi.json ./openapi.json && pnpm gen:api",
+    "check:openapi": "tsx scripts/check-openapi-drift.ts"
   },
   "dependencies": {
     "react": "^19.2.7",
@@ -31,7 +34,9 @@
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.16",
     "globals": "^15.14.0",
+    "openapi-typescript": "^7.4.4",
     "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.18.0",
     "vite": "^7.0.0"
