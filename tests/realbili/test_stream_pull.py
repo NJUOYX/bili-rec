@@ -24,11 +24,18 @@ from birec.flv.io import FlvReader
 _PULL_BYTES = 512 * 1024
 _PULL_TIMEOUT = 20.0
 
+# Bilibili's live CDN rejects stream requests that lack a live referer (403),
+# so tests mirror a real web client.
+_LIVE_REFERER = "https://live.bilibili.com/"
+
 
 async def _require_live_flv_url(live: Live) -> str:
     status = await live.get_live_status()
     if status != LiveStatus.LIVE:
         pytest.skip(f"room {live.room_id} is not LIVE (status={status.name})")
+    # Ensure the CDN referer is present for both connectivity checks and pulls,
+    # which read ``live.api.headers``.
+    live.api.headers = {**live.api.headers, "Referer": _LIVE_REFERER}
     try:
         return await live.get_stream_url("flv")
     except NoStreamFormatAvailable:

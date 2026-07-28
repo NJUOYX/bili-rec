@@ -95,7 +95,7 @@ class TestWebApiEndToEnd:
                 assert res.status_code == 200
                 listing = res.json()
                 assert listing["code"] == 0
-                room_ids = [t["room_id"] for t in listing["data"]]
+                room_ids = [t["room_id"] for t in listing["data"]["tasks"]]
                 assert live_room_id in room_ids
 
                 # Refresh info triggers a real Live.refresh() through the API.
@@ -118,7 +118,7 @@ class TestWebApiEndToEnd:
 
                 # It is gone from the listing.
                 res = await client.get(f"{_PREFIX}/data")
-                room_ids = [t["room_id"] for t in res.json()["data"]]
+                room_ids = [t["room_id"] for t in res.json()["data"]["tasks"]]
                 assert live_room_id not in room_ids
         finally:
             await manager.stop()
