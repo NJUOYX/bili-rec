@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -182,6 +183,29 @@ class TestStreamPolling:
 
 
 class TestPeriodicCheck:
+    async def test_enable_checks_status_immediately(self) -> None:
+        """A room already live when enabled must be detected without waiting.
+
+        The danmaku server only pushes future transitions, so a task added
+        mid-stream would otherwise look offline for a full check interval.
+        """
+        monitor, live = _make_monitor()
+        listener = _RecordingListener()
+        monitor.add_listener(listener)
+
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(monitor, "_start_stream_poll"),
+        ):
+            m.return_value = LiveStatus.LIVE
+            monitor.enable()
+            await asyncio.sleep(0)  # let the check task run its first step
+            await asyncio.sleep(0)
+
+        assert monitor.is_living is True
+        assert "live_began" in listener.events
+        monitor.disable()
+
     async def test_periodic_check_detects_live(self) -> None:
         monitor, live = _make_monitor()
         listener = _RecordingListener()
