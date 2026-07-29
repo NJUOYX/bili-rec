@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -30,6 +31,14 @@ __all__ = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _file_size(path: str) -> int:
+    """Size on disk, or 0 while the file has not been created yet."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
 
 
 class RunningStatus(Enum):
@@ -328,15 +337,31 @@ class RecordTask:
         return {}
 
     def get_videos(self) -> list[VideoFileDetail]:
-        """Get video file details."""
+        """Detail of the video file being written, if a recording is in progress."""
         path = self._recorder.stream_recorder.current_video_path
-        if path:
-            return [VideoFileDetail(path=path, status=FileStatus.RECORDING)]
-        return []
+        if not path:
+            return []
+        return [
+            VideoFileDetail(
+                path=path, size=_file_size(path), status=FileStatus.RECORDING
+            )
+        ]
 
     def get_danmakus(self) -> list[DanmakuFileDetail]:
-        """Get danmaku file details."""
-        return []
+        """Detail of the danmaku files being written alongside the video.
+
+        The raw JSONL file is listed too when the user enabled it, so the UI
+        reflects everything the recording actually produces.
+        """
+        recorder = self._recorder.stream_recorder
+        paths = [recorder.current_danmaku_path, recorder.current_raw_danmaku_path]
+        return [
+            DanmakuFileDetail(
+                path=path, size=_file_size(path), status=FileStatus.RECORDING
+            )
+            for path in paths
+            if path
+        ]
 
     async def refresh_info(self) -> None:
         """Refresh room/user info from the API."""

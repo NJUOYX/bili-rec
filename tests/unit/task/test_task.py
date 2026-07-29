@@ -53,6 +53,8 @@ def _make_components() -> dict[str, MagicMock]:
     recorder.is_recording = False
     recorder.stop = AsyncMock()
     recorder.stream_recorder.current_video_path = ""
+    recorder.stream_recorder.current_danmaku_path = ""
+    recorder.stream_recorder.current_raw_danmaku_path = ""
     recorder.stream_recorder.real_stream_format = None
     recorder.stream_recorder.real_quality_number = None
     postprocessor = MagicMock()
@@ -102,6 +104,43 @@ class TestModels:
         assert video.status == FileStatus.UNKNOWN
         danmaku = DanmakuFileDetail(path="/tmp/a.xml")
         assert danmaku.size == 0
+
+
+class TestRecordTaskFileDetails:
+    def test_no_files_while_idle(self) -> None:
+        task, _ = _make_task()
+        assert task.get_videos() == []
+        assert task.get_danmakus() == []
+
+    def test_files_report_real_paths_and_sizes(self, tmp_path: Path) -> None:
+        task, comps = _make_task()
+        video = tmp_path / "a.flv"
+        video.write_bytes(b"x" * 7)
+        danmaku = tmp_path / "a.xml"
+        danmaku.write_text("<i></i>", encoding="utf-8")
+        stream_recorder = comps["recorder"].stream_recorder
+        stream_recorder.current_video_path = str(video)
+        stream_recorder.current_danmaku_path = str(danmaku)
+
+        videos = task.get_videos()
+        assert [(f.path, f.size, f.status) for f in videos] == [
+            (str(video), 7, FileStatus.RECORDING)
+        ]
+        danmakus = task.get_danmakus()
+        assert [(f.path, f.size) for f in danmakus] == [(str(danmaku), 7)]
+
+    def test_raw_danmaku_file_is_listed_too(self, tmp_path: Path) -> None:
+        task, comps = _make_task()
+        stream_recorder = comps["recorder"].stream_recorder
+        stream_recorder.current_danmaku_path = str(tmp_path / "a.xml")
+        stream_recorder.current_raw_danmaku_path = str(tmp_path / "a.jsonl")
+
+        # Neither file exists yet: a size of 0 beats hiding the file entirely.
+        assert [f.size for f in task.get_danmakus()] == [0, 0]
+        assert [Path(f.path).suffix for f in task.get_danmakus()] == [
+            ".xml",
+            ".jsonl",
+        ]
 
 
 class TestRecordTaskStatus:
