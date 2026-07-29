@@ -27,3 +27,9 @@ export function describeApiError(error: unknown): {
     description: error instanceof Error ? error.message : String(error),
   }
 }
+
+/** 单行错误文案（标题：描述），用于 message.error / Alert。 */
+export function toMessage(error: unknown): string {
+  const { message, description } = describeApiError(error)
+  return description ? `${message}：${description}` : message
+}
