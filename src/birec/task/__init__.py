@@ -206,11 +206,27 @@ class RecordTask:
     # ── lifecycle ────────────────────────────────────────────────────────
 
     async def setup(self) -> None:
-        """Start monitoring (if enabled) and reconcile recorder registration."""
+        """Load room info, resolve danmaku servers, then start the components.
+
+        Both steps are prerequisites, not niceties: without ``live.init()`` the
+        room/user info stays empty (so file names and the task card have nothing
+        to show), and without the danmaku server list the client has nowhere to
+        connect, which strands the whole event-driven start/stop flow.
+        """
+        await self._live.init()
+        await self._fetch_danmu_info()
         if self._monitor_enabled:
             await self._start_monitoring()
         if not self._recorder_enabled:
             self._monitor.remove_listener(self._recorder)
+
+    async def _fetch_danmu_info(self) -> None:
+        """Feed the danmaku client the broadcast hosts and auth token."""
+        info = await self._live.api.get_danmu_info(self._room_id)
+        hosts = [
+            entry["host"] for entry in info.get("host_list", []) if entry.get("host")
+        ]
+        self._danmaku_client.set_danmu_info(hosts, info.get("token", ""))
 
     async def destroy(self) -> None:
         """Tear down all components for this task."""

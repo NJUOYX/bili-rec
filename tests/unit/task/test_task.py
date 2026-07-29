@@ -29,8 +29,15 @@ def _make_live() -> MagicMock:
     live.room_id = 12345
     live.room_info = None
     live.user_info = None
+    live.init = AsyncMock()
     live.get_stream_url = AsyncMock(return_value="https://cdn.example.com/live.flv")
     live.get_live_status = AsyncMock(return_value=LiveStatus.LIVE)
+    live.api.get_danmu_info = AsyncMock(
+        return_value={
+            "host_list": [{"host": "broadcastlv.chat.bilibili.com"}, {"host": ""}],
+            "token": "danmu-token",
+        }
+    )
     return live
 
 
@@ -125,6 +132,26 @@ class TestRecordTaskStatus:
 
 
 class TestRecordTaskLifecycle:
+    async def test_setup_loads_room_info(self) -> None:
+        """Room/user info must be loaded, or the task card renders empty."""
+        task, comps = _make_task()
+        await task.setup()
+        comps["live"].init.assert_awaited_once()
+
+    async def test_setup_feeds_danmaku_hosts(self) -> None:
+        """Without hosts the danmaku client can never open its WebSocket."""
+        task, comps = _make_task()
+        await task.setup()
+        comps["danmaku_client"].set_danmu_info.assert_called_once_with(
+            ["broadcastlv.chat.bilibili.com"], "danmu-token"
+        )
+
+    async def test_setup_feeds_hosts_even_when_monitor_disabled(self) -> None:
+        """A later ``enable_monitor`` must not need a second info fetch."""
+        task, comps = _make_task(enable_monitor=False)
+        await task.setup()
+        comps["danmaku_client"].set_danmu_info.assert_called_once()
+
     async def test_setup_starts_monitoring(self) -> None:
         task, comps = _make_task(enable_monitor=True)
         await task.setup()
