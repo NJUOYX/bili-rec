@@ -49,6 +49,19 @@ async def client(app: Any) -> AsyncClient:
         yield c  # type: ignore[misc]
 
 
+@pytest.fixture()
+async def started_client(app: Any) -> AsyncClient:
+    """Client on a *started* application, so the task factory can build tasks."""
+    application = app.state.application
+    await application.startup()
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c  # type: ignore[misc]
+    finally:
+        await application.shutdown()
+
+
 class TestFakeServerBasics:
     """Verify the fake server itself works correctly."""
 
@@ -145,6 +158,48 @@ class TestTaskLifecycleE2E:
         """Batch operations on empty task list."""
         resp = await client.post("/api/v1/tasks/info", json={"room_ids": [12345]})
         assert resp.status_code == 200
+
+
+class TestTaskAddE2E:
+    """Adding a task must produce a fully wired, populated task (§5.10).
+
+    This is the path a user takes from the web UI: the application-level task
+    factory builds the component graph, then ``setup`` loads room info and
+    resolves the danmaku servers.
+    """
+
+    async def test_add_task_populates_room_info(
+        self, fake_server: FakeBiliServer, started_client: AsyncClient
+    ) -> None:
+        resp = await started_client.post("/api/v1/tasks/12345", json={"room_id": 12345})
+        assert resp.json()["code"] == 0
+
+        body = (await started_client.get("/api/v1/tasks/12345/data")).json()
+        assert body["code"] == 0
+        data = body["data"]
+        assert data["room_id"] == 12345
+        assert data["room_title"] == "Test Live Room"
+        assert data["user_name"] == "TestStreamer"
+        assert data["area"] == "测试分区"
+        assert data["task_status"]["monitor_enabled"]
+        assert data["task_status"]["recorder_enabled"]
+
+        await started_client.delete("/api/v1/tasks/12345")
+
+    async def test_add_task_resolves_danmaku_hosts(
+        self, fake_server: FakeBiliServer, started_client: AsyncClient
+    ) -> None:
+        """The danmaku client is handed the servers returned by the API."""
+        resp = await started_client.post("/api/v1/tasks/12345", json={"room_id": 12345})
+        assert resp.json()["code"] == 0
+
+        application = started_client._transport.app.state.application  # type: ignore[attr-defined]  # noqa: SLF001
+        task = application.task_manager.get_task(12345)
+        client = task._danmaku_client  # noqa: SLF001
+        assert client._hosts == ["127.0.0.1"]  # noqa: SLF001
+        assert client._token == "fake_danmaku_token"  # noqa: SLF001
+
+        await started_client.delete("/api/v1/tasks/12345")
 
 
 class TestSettingsE2E:
