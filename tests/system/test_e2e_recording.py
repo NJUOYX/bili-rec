@@ -201,6 +201,70 @@ class TestTaskAddE2E:
 
         await started_client.delete("/api/v1/tasks/12345")
 
+    async def test_added_task_has_task_level_settings(
+        self, fake_server: FakeBiliServer, started_client: AsyncClient
+    ) -> None:
+        """The task settings page (§8.1) needs an entry for every added task."""
+        await started_client.post(
+            "/api/v1/tasks/12345", json={"room_id": 12345, "auto_enable": False}
+        )
+
+        body = (await started_client.get("/api/v1/settings/tasks/12345")).json()
+        assert body["code"] == 0
+        assert body["data"]["roomId"] == 12345
+        assert body["data"]["enableMonitor"] is False
+
+        patched = await started_client.patch(
+            "/api/v1/settings/tasks/12345",
+            json={"recorder": {"qualityNumber": 400}},
+        )
+        assert patched.json()["code"] == 0
+        assert patched.json()["data"]["recorder"]["qualityNumber"] == 400
+
+        # Deleting the task takes its settings with it.
+        await started_client.delete("/api/v1/tasks/12345")
+        gone = (await started_client.get("/api/v1/settings/tasks/12345")).json()
+        assert gone["code"] == 404
+
+    async def test_added_task_survives_a_restart(
+        self, fake_server: FakeBiliServer, app: Any, tmp_path: Path
+    ) -> None:
+        """Tasks are restored from the config file on the next start (§5.2)."""
+        application = app.state.application
+        await application.startup()
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                resp = await client.post("/api/v1/tasks/12345", json={"room_id": 12345})
+                assert resp.json()["code"] == 0
+        finally:
+            await application.shutdown()
+
+        # A second application over the same config file, as after a restart.
+        restarted = create_application(
+            config_path=tmp_path / "config.toml",
+            output_dir=tmp_path / "recordings",
+            log_dir=tmp_path / "logs",
+        )
+        settings = restarted.state.settings_manager.settings
+        settings.bili_api.base_api_urls = [fake_server.base_url]
+        settings.bili_api.base_live_api_urls = [fake_server.base_url]
+        settings.bili_api.base_play_info_api_urls = [fake_server.base_url]
+
+        await restarted.state.application.startup()
+        try:
+            transport = ASGITransport(app=restarted)
+            async with AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                body = (await client.get("/api/v1/tasks/12345/data")).json()
+                assert body["code"] == 0
+                assert body["data"]["user_name"] == "TestStreamer"
+        finally:
+            await restarted.state.application.shutdown()
+
 
 class TestSettingsE2E:
     """End-to-end settings management."""

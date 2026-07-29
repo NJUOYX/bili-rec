@@ -5,7 +5,7 @@
  * 8 分组表单在 CI 渲染较慢，waitFor 放宽超时。
  */
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { http, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 
 import { setupMswServer } from '../helpers/msw'
@@ -30,7 +30,7 @@ const globalSettings = {
 
 let lastPatch: unknown = null
 
-setupMswServer(
+const server = setupMswServer(
   http.get('*/api/v1/settings', () => ok(globalSettings)),
   http.patch('*/api/v1/settings', async ({ request }) => {
     lastPatch = await request.json()
@@ -79,6 +79,62 @@ describe('全局设置页', () => {
       WAIT,
     )
   })
+
+  it('保存分组时仅该分组按钮进入 loading', async () => {
+    // 各分组共用一个 mutation，故须验证 loading 不会蔓延到其他分组。
+    server.use(
+      http.patch('*/api/v1/settings', async () => {
+        await delay(200)
+        return ok(globalSettings)
+      }),
+    )
+    renderRoute(['/settings'])
+    await saveGroup('settings-space')
+    const saveBtn = (id: string) =>
+      within(cardById(id)).getByRole('button', { name: /保\s*存/ })
+    await waitFor(
+      () =>
+        expect(saveBtn('settings-space').className).toContain(
+          'ant-btn-loading',
+        ),
+      WAIT,
+    )
+    expect(saveBtn('settings-recorder').className).not.toContain(
+      'ant-btn-loading',
+    )
+  })
+
+  it('连点多组时各组 loading 互不影响且都能收尾', async () => {
+    // 共用 mutation 下若只记住最后一组，先提交的那组会提前停止转圈；
+    // 若依赖 mutate 级 onSettled，则有一组会永远停在 loading。
+    server.use(
+      http.patch('*/api/v1/settings', async () => {
+        await delay(300)
+        return ok(globalSettings)
+      }),
+    )
+    renderRoute(['/settings'])
+    await saveGroup('settings-space')
+    await saveGroup('settings-recorder')
+    const saveBtn = (id: string) =>
+      within(cardById(id)).getByRole('button', { name: /保\s*存/ })
+    await waitFor(
+      () =>
+        expect(saveBtn('settings-recorder').className).toContain(
+          'ant-btn-loading',
+        ),
+      WAIT,
+    )
+    expect(saveBtn('settings-space').className).toContain('ant-btn-loading')
+    await waitFor(() => {
+      expect(saveBtn('settings-space').className).not.toContain(
+        'ant-btn-loading',
+      )
+      expect(saveBtn('settings-recorder').className).not.toContain(
+        'ant-btn-loading',
+      )
+    }, WAIT)
+  })
 })
 
 describe('任务级设置页', () => {
@@ -106,5 +162,30 @@ describe('任务级设置页', () => {
       () => expect(lastPatch).toMatchObject({ header: expect.any(Object) }),
       WAIT,
     )
+  })
+
+  it('枚举字段的继承提示用选项标签而非原始值', async () => {
+    renderRoute(['/settings/tasks/23058'])
+    await waitFor(
+      () => expect(document.getElementById('settings-recorder')).toBeTruthy(),
+      WAIT,
+    )
+    const card = cardById('settings-recorder')
+    // 全局 streamFormat=flv / qualityNumber=10000 → “FLV” / “原画”。
+    expect(within(card).getByText('FLV')).toBeTruthy()
+    expect(within(card).getByText('原画')).toBeTruthy()
+    expect(within(card).queryByText('10000')).toBeNull()
+  })
+
+  it('开关字段以文字说明继承值', async () => {
+    renderRoute(['/settings/tasks/23058'])
+    await waitFor(
+      () => expect(document.getElementById('settings-danmaku')).toBeTruthy(),
+      WAIT,
+    )
+    // 全局 recordGiftSend=true / danmuUname=false。
+    const card = cardById('settings-danmaku')
+    expect(within(card).getByText('继承全局：开')).toBeTruthy()
+    expect(within(card).getByText('继承全局：关')).toBeTruthy()
   })
 })

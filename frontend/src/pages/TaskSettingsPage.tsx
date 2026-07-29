@@ -22,6 +22,7 @@ import {
 } from '../api/endpoints/settings'
 import { SettingsForm } from '../components/SettingsForm'
 import { toMessage } from '../lib/errors'
+import { usePendingGroups } from '../lib/pendingGroups'
 import {
   TASK_SETTINGS_GROUPS,
   buildPatchBody,
@@ -37,6 +38,7 @@ export function TaskSettingsPage() {
   const global = useSettings()
   const task = useTaskSettings(roomId)
   const patch = usePatchTaskSettings(roomId)
+  const pending = usePendingGroups()
 
   if (!valid) return <Alert type="warning" showIcon message="无效的房间号" />
   if (task.isLoading || global.isLoading)
@@ -56,10 +58,14 @@ export function TaskSettingsPage() {
 
   const handleSubmit =
     (groupKey: string) => (values: Record<string, unknown>) => {
-      patch.mutate(buildPatchBody(groupKey, values), {
-        onSuccess: () => message.success('任务设置已保存'),
-        onError: (e) => message.error(toMessage(e)),
-      })
+      pending.setPending(groupKey, true)
+      // 共用 mutation 时，mutate 级回调只为最后一次调用触发，故用每次调用
+      // 各自的 promise 收尾 loading。
+      void patch
+        .mutateAsync(buildPatchBody(groupKey, values))
+        .then(() => message.success('任务设置已保存'))
+        .catch((e: unknown) => message.error(toMessage(e)))
+        .finally(() => pending.setPending(groupKey, false))
     }
 
   return (
@@ -88,7 +94,7 @@ export function TaskSettingsPage() {
                 initialValues={getGroupValues(taskSettings, group.key)}
                 placeholders={getGroupValues(globalSettings, group.key)}
                 onSubmit={handleSubmit(group.key)}
-                submitting={patch.isPending}
+                submitting={pending.isPending(group.key)}
               />
             ))}
           </div>

@@ -81,3 +81,31 @@ def test_find_task_settings() -> None:
     assert manager.find_task_settings(2) is not None
     assert manager.find_task_settings(99) is None
     assert manager.has_task_settings(1) is True
+
+
+def test_add_task_settings_registers_the_room() -> None:
+    manager = SettingsManager(Settings(), "x.toml")
+    added = manager.add_task_settings(
+        23058, enable_monitor=False, enable_recorder=False
+    )
+    assert [t.room_id for t in manager.settings.tasks] == [23058]
+    assert added.enable_monitor is False
+    assert added.enable_recorder is False
+
+
+def test_add_task_settings_keeps_an_existing_entry() -> None:
+    """Restoring a configured room must not reset the user's overrides."""
+    existing = TaskSettings(room_id=23058, enable_recorder=False)
+    manager = SettingsManager(Settings(tasks=[existing]), "x.toml")
+    returned = manager.add_task_settings(23058, enable_recorder=True)
+    assert returned is existing
+    assert returned.enable_recorder is False
+    assert len(manager.settings.tasks) == 1
+
+
+def test_remove_task_settings() -> None:
+    settings = Settings(tasks=[TaskSettings(room_id=1), TaskSettings(room_id=2)])
+    manager = SettingsManager(settings, "x.toml")
+    manager.remove_task_settings(1)
+    manager.remove_task_settings(99)  # unknown room: nothing to undo
+    assert [t.room_id for t in manager.settings.tasks] == [2]

@@ -320,6 +320,41 @@ class TestAddTask:
         body = resp.json()
         assert body["code"] == 500
 
+    def test_add_forwards_auto_enable(
+        self, client: TestClient, task_manager: RecordTaskManager
+    ) -> None:
+        """``autoEnable: false`` must reach the manager, not be dropped (§5.2)."""
+        added: list[tuple[int, bool]] = []
+
+        def on_added(room_id: int, auto_enable: bool) -> bool:
+            added.append((room_id, auto_enable))
+            return True
+
+        task_manager._on_task_added = on_added
+        task_manager._task_factory = MagicMock(return_value=_make_mock_task(2002))
+
+        resp = client.post(
+            "/api/v1/tasks/2002", json={"room_id": 2002, "auto_enable": False}
+        )
+        assert resp.json()["code"] == 0
+        assert added == [(2002, False)]
+
+    def test_add_defaults_to_auto_enable(
+        self, client: TestClient, task_manager: RecordTaskManager
+    ) -> None:
+        added: list[tuple[int, bool]] = []
+
+        def on_added(room_id: int, auto_enable: bool) -> bool:
+            added.append((room_id, auto_enable))
+            return True
+
+        task_manager._on_task_added = on_added
+        task_manager._task_factory = MagicMock(return_value=_make_mock_task(2003))
+
+        resp = client.post("/api/v1/tasks/2003", json={"room_id": 2003})
+        assert resp.json()["code"] == 0
+        assert added == [(2003, True)]
+
 
 # ── POST /tasks/{room_id}/start ───────────────────────────────────────────────
 

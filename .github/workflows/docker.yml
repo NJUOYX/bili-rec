@@ -1,0 +1,47 @@
+name: Docker CI
+
+# Dockerfile 把前端 dist 与后端 wheel 合成单镜像（frontend-design.md §12）。
+# release.yml 只在打 tag 时构建，那时集成断裂已经太晚，故在 PR 上单独校验（不推送）。
+on:
+  push:
+    paths:
+      - "Dockerfile"
+      - "frontend/**"
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "frontend/**"
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docker.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (不推送)
+        uses: docker/build-push-action@v6
+        with:
+          push: false
+          load: true
+          tags: birec:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify frontend build is bundled (§12 静态托管)
+        run: |
+          docker run --rm --entrypoint sh birec:ci -c '
+            test -f "$BIREC_STATIC_DIR/index.html" &&
+            ls "$BIREC_STATIC_DIR/assets" >/dev/null'
+
+      - name: Verify entrypoint is installed
+        run: docker run --rm --entrypoint birec birec:ci --help

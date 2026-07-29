@@ -8,11 +8,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 from fastapi import APIRouter, Request
 
 from ..models import ResponseMessage
 
 app_router = APIRouter(prefix="/api/v1", tags=["app"])
+
+# Only transport failures are upstream's fault; anything else (a bug here, a
+# contract change) must keep surfacing as a 500 so it is not mistaken for
+# 「B 站不可达」.
+_UPSTREAM_ERRORS = (aiohttp.ClientError, TimeoutError, OSError)
 
 
 # ── App status/info/restart/exit ─────────────────────────────────────────────
@@ -75,7 +81,14 @@ async def qrcode_login(request: Request) -> dict[str, Any]:
     except AttributeError:
         return ResponseMessage(code=503, message="Bili API not initialized").to_dict()
 
-    result = await api.request_tv_qrcode()
+    try:
+        result = await api.request_tv_qrcode()
+    except _UPSTREAM_ERRORS as e:
+        # Bilibili's passport host is the only way to mint a code; a network
+        # failure is upstream's, so report it instead of a bare 500.
+        return ResponseMessage(
+            code=502, message=f"Failed to request QR code: {e}"
+        ).to_dict()
     return ResponseMessage(data=result).to_dict()
 
 
@@ -94,7 +107,10 @@ async def qrcode_login_poll(request: Request) -> dict[str, Any]:
     if not auth_code:
         return ResponseMessage(code=400, message="auth_code is required").to_dict()
 
-    result = await api.poll_tv_qrcode(auth_code)
+    try:
+        result = await api.poll_tv_qrcode(auth_code)
+    except _UPSTREAM_ERRORS as e:
+        return ResponseMessage(code=502, message=f"Failed to poll login: {e}").to_dict()
     code_val = result.get("code", -1)
 
     if code_val == 0:

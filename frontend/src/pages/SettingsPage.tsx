@@ -9,6 +9,7 @@ import { App as AntdApp, Alert, Anchor, Col, Row, Skeleton } from 'antd'
 import { useSettings, usePatchSettings } from '../api/endpoints/settings'
 import { SettingsForm } from '../components/SettingsForm'
 import { toMessage } from '../lib/errors'
+import { usePendingGroups } from '../lib/pendingGroups'
 import {
   SETTINGS_GROUPS,
   buildPatchBody,
@@ -19,6 +20,7 @@ export function SettingsPage() {
   const { message } = AntdApp.useApp()
   const { data, isLoading, isError, error } = useSettings()
   const patch = usePatchSettings()
+  const pending = usePendingGroups()
 
   if (isLoading) return <Skeleton active paragraph={{ rows: 8 }} />
   if (isError)
@@ -35,10 +37,14 @@ export function SettingsPage() {
 
   const handleSubmit =
     (groupKey: string) => (values: Record<string, unknown>) => {
-      patch.mutate(buildPatchBody(groupKey, values), {
-        onSuccess: () => message.success('设置已保存'),
-        onError: (e) => message.error(toMessage(e)),
-      })
+      pending.setPending(groupKey, true)
+      // 用 mutateAsync 的「每次调用一个 promise」：共用 mutation 时，传给 mutate
+      // 的回调只会为最后一次调用触发，先前那次的 loading 将永远无法收尾。
+      void patch
+        .mutateAsync(buildPatchBody(groupKey, values))
+        .then(() => message.success('设置已保存'))
+        .catch((e: unknown) => message.error(toMessage(e)))
+        .finally(() => pending.setPending(groupKey, false))
     }
 
   return (
@@ -61,7 +67,7 @@ export function SettingsPage() {
               group={group}
               initialValues={getGroupValues(settings, group.key)}
               onSubmit={handleSubmit(group.key)}
-              submitting={patch.isPending}
+              submitting={pending.isPending(group.key)}
             />
           ))}
         </div>

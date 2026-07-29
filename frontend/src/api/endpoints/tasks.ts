@@ -122,7 +122,7 @@ export function useAddTask() {
       call(() =>
         api.POST('/api/v1/tasks/{room_id}', {
           params: { path: { room_id: roomId } } as never,
-          body: { room_id: roomId, auto_enable: true, save: false },
+          body: { room_id: roomId, auto_enable: true },
         }),
       ),
     onSuccess: () => invalidate(),

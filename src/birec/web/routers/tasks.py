@@ -27,11 +27,15 @@ router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
 
 class AddTaskRequest(BaseModel):
-    """Request body for adding a task."""
+    """Request body for adding a task.
+
+    The room is always written to the config file, so the task survives a
+    restart and has task-level options to patch. ``auto_enable`` decides
+    whether monitoring and recording start enabled (§5.2).
+    """
 
     room_id: int
     auto_enable: bool = True
-    save: bool = False
 
 
 class BatchRoomIds(BaseModel):
@@ -369,7 +373,7 @@ async def add_task(request: Request, body: AddTaskRequest) -> dict[str, Any]:
     """Add a new task for a room."""
     manager = _get_manager(request)
     try:
-        task = await manager.add_task(body.room_id)
+        task = await manager.add_task(body.room_id, auto_enable=body.auto_enable)
     except ValueError as exc:
         return ResponseMessage(code=409, message=str(exc)).to_dict()
     except RuntimeError as exc:

@@ -13,6 +13,7 @@ import {
   Select,
   Space,
   Switch,
+  Typography,
 } from 'antd'
 
 import type { FieldDescriptor, GroupDescriptor } from '../lib/settingsSchema'
@@ -28,11 +29,21 @@ export interface SettingsFormProps {
   placeholders?: Record<string, unknown>
 }
 
+/** 继承值的可读形式：枚举字段用选项标签，而非后端的原始值。 */
+function inheritedText(
+  field: FieldDescriptor,
+  placeholder: unknown,
+): string | undefined {
+  if (placeholder == null) return undefined
+  const option = field.options?.find((o) => o.value === placeholder)
+  return option?.label ?? String(placeholder)
+}
+
 function renderControl(
   field: FieldDescriptor,
   placeholder: unknown,
 ): React.ReactNode {
-  const ph = placeholder != null ? String(placeholder) : field.placeholder
+  const ph = inheritedText(field, placeholder) ?? field.placeholder
   switch (field.type) {
     case 'switch':
       return <Switch />
@@ -93,23 +104,35 @@ export function SettingsForm({
         initialValues={initialValues}
         onFinish={onSubmit}
       >
-        {group.fields.map((field) => (
-          <Form.Item
-            key={field.key}
-            name={field.key}
-            label={field.label}
-            help={field.help}
-            valuePropName={field.type === 'switch' ? 'checked' : 'value'}
-            rules={
-              field.type === 'number' &&
-              (field.min != null || field.max != null)
-                ? [{ type: 'number', min: field.min, max: field.max }]
-                : undefined
-            }
-          >
-            {renderControl(field, placeholders?.[field.key])}
-          </Form.Item>
-        ))}
+        {group.fields.map((field) => {
+          const inherited = placeholders?.[field.key]
+          // 开关无法像输入框那样用 placeholder 表达「继承」，未改动的开关一律
+          // 显示为关，故把继承值写成说明文字，避免误读为任务级已关闭。
+          const inheritHint =
+            field.type === 'switch' && inherited != null ? (
+              <Typography.Text type="secondary">
+                继承全局：{inherited ? '开' : '关'}
+              </Typography.Text>
+            ) : undefined
+          return (
+            <Form.Item
+              key={field.key}
+              name={field.key}
+              label={field.label}
+              help={field.help}
+              extra={inheritHint}
+              valuePropName={field.type === 'switch' ? 'checked' : 'value'}
+              rules={
+                field.type === 'number' &&
+                (field.min != null || field.max != null)
+                  ? [{ type: 'number', min: field.min, max: field.max }]
+                  : undefined
+              }
+            >
+              {renderControl(field, inherited)}
+            </Form.Item>
+          )
+        })}
         <Form.Item>
           <Space>
             <Button type="primary" htmlType="submit" loading={submitting}>

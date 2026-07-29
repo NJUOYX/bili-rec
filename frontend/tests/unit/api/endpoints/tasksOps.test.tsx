@@ -100,7 +100,7 @@ describe('单任务操作 mutations', () => {
     })
     await act(() => result.current.mutateAsync(23058))
     expect(seenPath).toBe('/api/v1/tasks/23058')
-    expect(seenBody).toEqual({ room_id: 23058, auto_enable: true, save: false })
+    expect(seenBody).toEqual({ room_id: 23058, auto_enable: true })
     expect(invalidated).toHaveBeenCalledWith({ queryKey: ['tasks'] })
   })
 

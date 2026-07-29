@@ -603,6 +603,10 @@ export interface components {
         /**
          * AddTaskRequest
          * @description Request body for adding a task.
+         *
+         *     The room is always written to the config file, so the task survives a
+         *     restart and has task-level options to patch. ``auto_enable`` decides
+         *     whether monitoring and recording start enabled (§5.2).
          */
         AddTaskRequest: {
             /** Room Id */
@@ -612,11 +616,6 @@ export interface components {
              * @default true
              */
             auto_enable: boolean;
-            /**
-             * Save
-             * @default false
-             */
-            save: boolean;
         };
         /**
          * BatchRoomIds

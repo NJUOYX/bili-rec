@@ -175,6 +175,31 @@ class TestQrcodeLogin:
         assert body["code"] == 0
         assert body["data"]["auth_code"] == "abc"
 
+    async def test_qrcode_login_upstream_failure(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        """Bilibili's passport host being unreachable is upstream's fault, not a 500."""
+        mock_api = MagicMock()
+        mock_api.request_tv_qrcode = AsyncMock(side_effect=OSError("no route"))
+        app.state.bili_api = mock_api
+
+        resp = await client.get("/api/v1/qrcode/login")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["code"] == 502
+        assert "no route" in body["message"]
+
+    async def test_qrcode_login_local_bug_is_not_masked_as_upstream(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        """A bug on our side must not be reported as 「Bilibili unreachable」."""
+        mock_api = MagicMock()
+        mock_api.request_tv_qrcode = AsyncMock(side_effect=ValueError("our bug"))
+        app.state.bili_api = mock_api
+
+        with pytest.raises(ValueError, match="our bug"):
+            await client.get("/api/v1/qrcode/login")
+
     async def test_qrcode_poll_no_api(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/v1/qrcode/login/poll",
@@ -237,6 +262,22 @@ class TestQrcodeLogin:
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 86039
+
+    async def test_qrcode_poll_upstream_failure(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        mock_api = MagicMock()
+        mock_api.poll_tv_qrcode = AsyncMock(side_effect=OSError("no route"))
+        app.state.bili_api = mock_api
+
+        resp = await client.post(
+            "/api/v1/qrcode/login/poll",
+            json={"auth_code": "abc"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["code"] == 502
+        assert "no route" in body["message"]
 
 
 # ── Validation ───────────────────────────────────────────────────────────────

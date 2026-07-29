@@ -10,6 +10,7 @@ from pathlib import Path
 import aiohttp
 from fastapi import FastAPI
 
+from birec.bili.api import AppApi
 from birec.bili.danmaku_client import DanmakuClient
 from birec.bili.live import Live
 from birec.bili.live_monitor import LiveMonitor
@@ -64,7 +65,12 @@ class Application:
         )
         self._settings_manager = SettingsManager.load_with_env(env)
         self._session: aiohttp.ClientSession | None = None
-        self._task_manager = RecordTaskManager(self._create_task)
+        self._bili_api: AppApi | None = None
+        self._task_manager = RecordTaskManager(
+            self._create_task,
+            on_task_added=self._register_task_settings,
+            on_task_removed=self._forget_task_settings,
+        )
 
     @property
     def is_started(self) -> bool:
@@ -86,14 +92,64 @@ class Application:
     def task_manager(self) -> RecordTaskManager:
         return self._task_manager
 
+    @property
+    def bili_api(self) -> AppApi:
+        """The app-signed API client backing TV QR code login (§7.3).
+
+        Raises:
+            RuntimeError: If called before ``startup`` created the HTTP session.
+        """
+        if self._bili_api is None:
+            raise RuntimeError("Application not started: no HTTP session")
+        return self._bili_api
+
     async def startup(self) -> None:
         """Initialize application components."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._session = aiohttp.ClientSession()
+        self._bili_api = self._create_bili_api(self._session)
         await self._task_manager.start()
+        await self._restore_configured_tasks()
         self._started = True
         logger.info("Application started (output=%s)", self.output_dir)
+
+    def _create_bili_api(self, session: aiohttp.ClientSession) -> AppApi:
+        """The login client shares the configured cookie and API domains."""
+        settings = self._settings_manager.settings
+        api = AppApi(session, {"Cookie": settings.header.cookie})
+        api.base_api_urls = list(settings.bili_api.base_api_urls)
+        api.base_live_api_urls = list(settings.bili_api.base_live_api_urls)
+        api.base_play_info_api_urls = list(settings.bili_api.base_play_info_api_urls)
+        return api
+
+    async def _restore_configured_tasks(self) -> None:
+        """Recreate the tasks recorded in the config file (§5.2)."""
+        room_ids = [task.room_id for task in self._settings_manager.settings.tasks]
+        if room_ids:
+            await self._task_manager.load_tasks(room_ids)
+
+    # ── task settings registry (§5.2) ───────────────────────────────
+
+    def _register_task_settings(self, room_id: int, auto_enable: bool) -> bool:
+        """Put a room in the config before its task is built.
+
+        Returns:
+            Whether a new entry was created (an already configured room keeps
+            its overrides, and must not be dropped if setup then fails).
+        """
+        created = not self._settings_manager.has_task_settings(room_id)
+        self._settings_manager.add_task_settings(
+            room_id, enable_monitor=auto_enable, enable_recorder=auto_enable
+        )
+        if created:
+            self._settings_manager.dump()
+        return created
+
+    def _forget_task_settings(self, room_id: int) -> None:
+        """Drop a removed room from the config so it is not restored again."""
+        self._settings_manager.remove_task_settings(room_id)
+        self._settings_manager.dump()
 
     async def shutdown(self) -> None:
         """Persist settings and release application components."""
@@ -101,6 +157,7 @@ class Application:
         if self._session is not None:
             await self._session.close()
             self._session = None
+        self._bili_api = None
         self._settings_manager.dump()
         self._started = False
         logger.info("Application stopped")
@@ -242,6 +299,8 @@ def create_application(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await application.startup()
+        # Only available once startup created the HTTP session it needs.
+        app.state.bili_api = application.bili_api
         yield
         await application.shutdown()
 

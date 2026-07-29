@@ -292,7 +292,13 @@ jobs:
 - 启动后端 fake 服务 + `pnpm preview` 后运行 `pnpm e2e`（Playwright，安装浏览器）。
 - 与后端一致：E2E 较慢，跑在 PR 与合并到 `main`。
 
-### 11.3 质量基线
+### 11.3 `docker.yml`（PR + push）
+
+- 触发路径：`Dockerfile`、`frontend/**`、`src/**`、`pyproject.toml`、`uv.lock`。
+- `docker build`（`push: false`）构建 §12 的多阶段镜像，再在容器内断言 `$BIREC_STATIC_DIR/index.html` 与 `assets/` 存在、`birec --help` 可执行。
+- 目的：前后端产物的合并只在打 tag 时才验证就太晚，故在 PR 上前置拦截集成断裂。
+
+### 11.4 质量基线
 
 - ESLint + Prettier 与 CI 同规则，纳入仓库 `pre-commit`/lint-staged 本地拦截。
 - 分支保护：`frontend.yml` 通过 + 契约同步 + 至少 1 名评审。
@@ -303,7 +309,7 @@ jobs:
 
 - **产物托管**：`pnpm build` 输出到 `frontend/dist/`；构建时同步/内嵌进后端可分发的静态目录，由 FastAPI 静态挂载（`StaticFiles`）+ `RouteRedirectMiddleware` 实现 SPA 路由回退（非 `/api`、`/ws`、非静态资源的 404 → `index.html`）。
 - **子路径反代**：`index.html` 保留 `<head>`，运行时由后端 `BaseHrefMiddleware` 注入 `<base href="/子路径/">`；前端资源使用相对路径，Router 读取 `<base>`/`--root-path` 前缀。
-- **Docker**：在后端多阶段镜像中新增前端构建阶段（node + pnpm 构建 `dist`），拷贝至运行阶段静态目录；单镜像同时提供 API 与 UI。
+- **Docker**：在后端多阶段镜像中新增前端构建阶段（node + pnpm 构建 `dist`），拷贝至运行阶段静态目录（`BIREC_STATIC_DIR`）；单镜像同时提供 API 与 UI。构建可用性由 §11.3 的 `docker.yml` 在 PR 上校验，`release.yml` 仅负责打 tag 后推送镜像。
 - **开发**：`vite dev` + `server.proxy` 代理 `/api`、`/ws` 到本地后端（默认 `:2233`），前后端可独立热更。
 
 ---

@@ -382,11 +382,26 @@ class RecordTaskManager:
         *,
         space_monitor: SpaceMonitor | None = None,
         space_reclaimer: SpaceReclaimer | None = None,
+        on_task_added: Callable[[int, bool], bool] | None = None,
+        on_task_removed: Callable[[int], None] | None = None,
     ) -> None:
+        """
+        Args:
+            task_factory: Builds a task's component graph for a room.
+            space_monitor: Disk-space monitor started with the manager.
+            space_reclaimer: Disk-space reclaimer bound to the monitor.
+            on_task_added: Called as ``(room_id, auto_enable)`` before the task
+                is built, so the factory can read the room's configuration.
+                Returns whether a new config entry was created, which decides
+                whether a failed setup should roll it back again.
+            on_task_removed: Called after a task is destroyed.
+        """
         self._tasks: dict[int, RecordTask] = {}
         self._task_factory = task_factory
         self._space_monitor = space_monitor
         self._space_reclaimer = space_reclaimer
+        self._on_task_added = on_task_added
+        self._on_task_removed = on_task_removed
 
     @property
     def task_count(self) -> int:
@@ -406,11 +421,15 @@ class RecordTaskManager:
             await self._space_monitor.start()
 
     async def stop(self) -> None:
-        """Stop background services and destroy all tasks."""
+        """Stop background services and destroy all tasks.
+
+        Shutting down is not the same as the user deleting tasks: the config
+        entries stay behind so the rooms are restored on the next start.
+        """
         if self._space_monitor is not None:
             await self._space_monitor.stop()
         for room_id in list(self._tasks):
-            await self.remove_task(room_id)
+            await self._destroy_task(room_id)
 
     def get_task(self, room_id: int) -> RecordTask | None:
         """Get a task by room ID."""
@@ -420,8 +439,18 @@ class RecordTaskManager:
         """Get all tasks."""
         return list(self._tasks.values())
 
-    async def add_task(self, room_id: int) -> RecordTask:
+    async def add_task(self, room_id: int, *, auto_enable: bool = True) -> RecordTask:
         """Create, set up, and register a new task.
+
+        The room is registered in the configuration first so the factory can
+        resolve its options, and so the task survives a restart. A setup that
+        fails halfway is rolled back: the half-built task is torn down and a
+        config entry created by this call is removed again.
+
+        Args:
+            room_id: The room to record.
+            auto_enable: Whether monitoring and recording start enabled. Only
+                applies to a room that is not configured yet.
 
         Raises:
             ValueError: If a task for the room already exists.
@@ -431,14 +460,45 @@ class RecordTaskManager:
             raise ValueError(f"Task for room {room_id} already exists")
         if self._task_factory is None:
             raise RuntimeError("No task factory configured")
+        registered = (
+            self._on_task_added(room_id, auto_enable)
+            if self._on_task_added is not None
+            else False
+        )
         task = self._task_factory(room_id)
-        await task.setup()
+        try:
+            await task.setup()
+        except Exception:
+            await self._rollback_task(task, room_id, registered)
+            raise
         self._tasks[room_id] = task
         logger.info("Added task for room %d", room_id)
         return task
 
+    async def _rollback_task(
+        self, task: RecordTask, room_id: int, registered: bool
+    ) -> None:
+        """Undo a failed ``add_task`` without masking the original error."""
+        try:
+            await task.destroy()
+        except Exception:
+            logger.exception("Failed to tear down task for room %d", room_id)
+        if registered and self._on_task_removed is not None:
+            self._on_task_removed(room_id)
+
     async def remove_task(self, room_id: int) -> None:
-        """Destroy and remove a task.
+        """Destroy and remove a task, and forget its configuration.
+
+        Raises:
+            KeyError: If no task exists for the room.
+        """
+        await self._destroy_task(room_id)
+        if self._on_task_removed is not None:
+            self._on_task_removed(room_id)
+        logger.info("Removed task for room %d", room_id)
+
+    async def _destroy_task(self, room_id: int) -> None:
+        """Tear a task down and drop it from the registry.
 
         Raises:
             KeyError: If no task exists for the room.
@@ -446,7 +506,6 @@ class RecordTaskManager:
         task = self._get_or_raise(room_id)
         await task.destroy()
         del self._tasks[room_id]
-        logger.info("Removed task for room %d", room_id)
 
     async def start_task(self, room_id: int) -> None:
         """Enable monitoring for a task."""
@@ -473,10 +532,19 @@ class RecordTaskManager:
         return [task.get_data() for task in self._tasks.values()]
 
     async def load_tasks(self, room_ids: list[int]) -> None:
-        """Add tasks for any of the given room IDs not already present."""
+        """Add tasks for any of the given room IDs not already present.
+
+        Used to restore the configured tasks at startup (§5.2): one room that
+        cannot be loaded (network failure, room gone) must not keep the others
+        from loading, so failures are logged per room.
+        """
         for room_id in room_ids:
-            if room_id not in self._tasks:
+            if room_id in self._tasks:
+                continue
+            try:
                 await self.add_task(room_id)
+            except Exception:
+                logger.exception("Failed to load task for room %d", room_id)
 
     async def batch_refresh_info(self) -> None:
         """Refresh info for all tasks."""

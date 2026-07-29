@@ -1274,11 +1274,6 @@
             "type": "boolean",
             "title": "Auto Enable",
             "default": true
-          },
-          "save": {
-            "type": "boolean",
-            "title": "Save",
-            "default": false
           }
         },
         "type": "object",
@@ -1286,7 +1281,7 @@
           "room_id"
         ],
         "title": "AddTaskRequest",
-        "description": "Request body for adding a task."
+        "description": "Request body for adding a task.\n\nThe room is always written to the config file, so the task survives a\nrestart and has task-level options to patch. ``auto_enable`` decides\nwhether monitoring and recording start enabled (§5.2)."
       },
       "BatchRoomIds": {
         "properties": {

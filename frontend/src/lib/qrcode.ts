@@ -2,7 +2,9 @@
  * 扫码登录轮询状态映射（frontend-design.md §8 登录页）。
  *
  * B 站 TV 扫码登录 poll 接口以业务码表达「进行中状态」，非错误：
- * 0=成功，86101=未扫码，86090=已扫码待确认，86038=二维码失效，其余=错误。
+ * 0=成功，86039=二维码尚未确认，86038=二维码失效，其余=错误。
+ * TV 接口不区分「未扫码」与「已扫码待确认」，两者均为 86039；web 端的
+ * 86101/86090 一并保留，以免后端改用 web 登录接口时这里静默失效。
  */
 export type QrcodeState =
   'idle' | 'waiting' | 'scanned' | 'success' | 'expired' | 'error'
@@ -11,6 +13,7 @@ export function mapPollCode(code: number): QrcodeState {
   switch (code) {
     case 0:
       return 'success'
+    case 86039:
     case 86101:
       return 'waiting'
     case 86090:

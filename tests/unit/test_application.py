@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 
-from birec.application import Application
+from birec.application import Application, create_application
 from birec.setting.models import (
     HeaderOptions,
     PostprocessingOptions,
     RecorderOptions,
     TaskSettings,
 )
+from birec.task import RecordTask
+
+
+def _stub_factory(room_id: int) -> RecordTask:
+    """A task that needs no network, for exercising the manager's bookkeeping."""
+    task = MagicMock(spec=RecordTask)
+    task.room_id = room_id
+    task.setup = AsyncMock()
+    task.destroy = AsyncMock()
+    return task
 
 
 @pytest.fixture
@@ -150,3 +162,97 @@ class TestSessionLifecycle:
         await application.shutdown()
         assert application._session is None  # noqa: SLF001
         assert session.closed
+
+
+class TestBiliApi:
+    """The login endpoints need an app-signed client on the running app (§7.3)."""
+
+    def test_unavailable_before_startup(self, application: Application) -> None:
+        with pytest.raises(RuntimeError, match="not started"):
+            _ = application.bili_api
+
+    async def test_created_with_the_configured_cookie_and_domains(
+        self, application: Application
+    ) -> None:
+        settings = application.settings_manager.settings
+        settings.header.cookie = "SESSDATA=abc"
+        settings.bili_api.base_api_urls = ["https://api.example.com"]
+
+        await application.startup()
+        try:
+            api = application.bili_api
+            assert api.headers["Cookie"] == "SESSDATA=abc"
+            assert api.base_api_urls == ["https://api.example.com"]
+        finally:
+            await application.shutdown()
+
+    async def test_exposed_on_the_app_state(self, tmp_path: Path) -> None:
+        """``/qrcode/login`` reads it off the app state, not the Application."""
+        app = create_application(
+            config_path=tmp_path / "config.toml",
+            output_dir=tmp_path / "recordings",
+            log_dir=tmp_path / "logs",
+        )
+        with TestClient(app):
+            assert app.state.bili_api is app.state.application.bili_api
+
+
+class TestConfiguredTasks:
+    """Tasks live in the config file, so they survive a restart (§5.2)."""
+
+    async def test_added_task_is_written_to_the_config(
+        self, application: Application
+    ) -> None:
+        manager = application.settings_manager
+        await application.startup()
+        try:
+            application.task_manager._task_factory = _stub_factory  # noqa: SLF001
+            await application.task_manager.add_task(23058, auto_enable=False)
+
+            configured = manager.find_task_settings(23058)
+            assert configured is not None
+            assert configured.enable_monitor is False
+            assert configured.enable_recorder is False
+            # Written through to disk, so a crash does not lose the task.
+            assert "23058" in Path(manager.path).read_text(encoding="utf-8")
+        finally:
+            await application.shutdown()
+
+    async def test_removed_task_is_dropped_from_the_config(
+        self, application: Application
+    ) -> None:
+        manager = application.settings_manager
+        await application.startup()
+        try:
+            application.task_manager._task_factory = _stub_factory  # noqa: SLF001
+            await application.task_manager.add_task(23058)
+            await application.task_manager.remove_task(23058)
+            assert manager.find_task_settings(23058) is None
+        finally:
+            await application.shutdown()
+
+    async def test_shutdown_keeps_the_configured_tasks(
+        self, application: Application
+    ) -> None:
+        await application.startup()
+        application.task_manager._task_factory = _stub_factory  # noqa: SLF001
+        await application.task_manager.add_task(23058)
+        await application.shutdown()
+        assert application.settings_manager.has_task_settings(23058)
+
+    async def test_startup_restores_the_configured_tasks(
+        self, application: Application
+    ) -> None:
+        application.settings_manager.settings.tasks = [
+            TaskSettings(room_id=23058),
+            TaskSettings(room_id=100),
+        ]
+        application.task_manager._task_factory = _stub_factory  # noqa: SLF001
+
+        await application.startup()
+        try:
+            assert sorted(
+                task.room_id for task in application.task_manager.get_all_tasks()
+            ) == [100, 23058]
+        finally:
+            await application.shutdown()

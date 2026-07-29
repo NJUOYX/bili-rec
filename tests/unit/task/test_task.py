@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -362,6 +363,94 @@ class TestRecordTaskManager:
         assert mgr.task_count == 3
         await mgr.load_tasks([2, 3, 4])  # 2,3 already present
         assert mgr.task_count == 4
+
+    async def test_load_tasks_skips_a_room_that_fails(self) -> None:
+        """One unreachable room must not keep the others from being restored."""
+
+        def factory(room_id: int) -> RecordTask:
+            task, _ = _make_task(room_id=room_id)
+            task.destroy = AsyncMock()  # type: ignore[method-assign]
+            task.setup = AsyncMock(  # type: ignore[method-assign]
+                side_effect=OSError("boom") if room_id == 2 else None
+            )
+            return task
+
+        mgr = RecordTaskManager(factory)
+        await mgr.load_tasks([1, 2, 3])
+        assert sorted(t.room_id for t in mgr.get_all_tasks()) == [1, 3]
+
+
+class TestRecordTaskManagerRegistry:
+    """The manager reports task adds/removals so they can be persisted (§5.2)."""
+
+    def _factory(self, *, failing: bool = False) -> Callable[[int], RecordTask]:
+        def factory(room_id: int) -> RecordTask:
+            task, _ = _make_task(room_id=room_id)
+            task.destroy = AsyncMock()  # type: ignore[method-assign]
+            task.setup = AsyncMock(  # type: ignore[method-assign]
+                side_effect=OSError("boom") if failing else None
+            )
+            return task
+
+        return factory
+
+    async def test_add_task_reports_the_room_before_building_it(self) -> None:
+        added: list[tuple[int, bool]] = []
+
+        def on_added(room_id: int, auto_enable: bool) -> bool:
+            added.append((room_id, auto_enable))
+            return True
+
+        factory = MagicMock(side_effect=self._factory())
+        mgr = RecordTaskManager(factory, on_task_added=on_added)
+        await mgr.add_task(23058, auto_enable=False)
+        # Registered first, so the factory can read the room's configuration.
+        assert added == [(23058, False)]
+        factory.assert_called_once_with(23058)
+
+    async def test_remove_task_reports_the_room(self) -> None:
+        removed: list[int] = []
+        mgr = RecordTaskManager(
+            self._factory(), on_task_removed=lambda room_id: removed.append(room_id)
+        )
+        await mgr.add_task(1)
+        await mgr.remove_task(1)
+        assert removed == [1]
+
+    async def test_stop_keeps_the_rooms_registered(self) -> None:
+        """Shutting down is not the user deleting tasks."""
+        removed: list[int] = []
+        mgr = RecordTaskManager(
+            self._factory(), on_task_removed=lambda room_id: removed.append(room_id)
+        )
+        await mgr.add_task(1)
+        await mgr.stop()
+        assert mgr.task_count == 0
+        assert removed == []
+
+    async def test_failed_setup_rolls_back_a_new_room(self) -> None:
+        removed: list[int] = []
+        mgr = RecordTaskManager(
+            self._factory(failing=True),
+            on_task_added=lambda room_id, auto: True,
+            on_task_removed=lambda room_id: removed.append(room_id),
+        )
+        with pytest.raises(OSError, match="boom"):
+            await mgr.add_task(1)
+        assert mgr.task_count == 0
+        assert removed == [1]
+
+    async def test_failed_setup_keeps_an_already_configured_room(self) -> None:
+        """A transient failure must not delete configuration the user wrote."""
+        removed: list[int] = []
+        mgr = RecordTaskManager(
+            self._factory(failing=True),
+            on_task_added=lambda room_id, auto: False,
+            on_task_removed=lambda room_id: removed.append(room_id),
+        )
+        with pytest.raises(OSError, match="boom"):
+            await mgr.add_task(1)
+        assert removed == []
 
 
 class TestRecordTaskManagerSpace:

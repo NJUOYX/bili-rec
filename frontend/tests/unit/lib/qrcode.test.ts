@@ -13,6 +13,8 @@ import {
 describe('mapPollCode', () => {
   it.each([
     [0, 'success'],
+    // TV 登录接口的等待码，当作错误会让登录页立即放弃轮询。
+    [86039, 'waiting'],
     [86101, 'waiting'],
     [86090, 'scanned'],
     [86038, 'expired'],

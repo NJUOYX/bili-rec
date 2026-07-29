@@ -86,6 +86,37 @@ class SettingsManager:
     def has_task_settings(self, room_id: int) -> bool:
         return self.find_task_settings(room_id) is not None
 
+    def add_task_settings(
+        self,
+        room_id: int,
+        *,
+        enable_monitor: bool = True,
+        enable_recorder: bool = True,
+    ) -> TaskSettings:
+        """Register a room in the config, or return the existing entry.
+
+        The config is the source of truth for tasks: an added task only
+        survives a restart, and only has task-level options to read or patch,
+        once it has an entry here. An existing entry is returned untouched so
+        restoring tasks at startup never overwrites the user's overrides.
+        """
+        existing = self.find_task_settings(room_id)
+        if existing is not None:
+            return existing
+        settings = TaskSettings(
+            room_id=room_id,
+            enable_monitor=enable_monitor,
+            enable_recorder=enable_recorder,
+        )
+        self._settings.tasks.append(settings)
+        return settings
+
+    def remove_task_settings(self, room_id: int) -> None:
+        """Drop a room's config entry; a room without one is left alone."""
+        self._settings.tasks = [
+            settings for settings in self._settings.tasks if settings.room_id != room_id
+        ]
+
     def resolve_task_settings(self, room_id: int) -> dict[str, BaseModel]:
         """Merge a task's per-section options over the global settings.
 
