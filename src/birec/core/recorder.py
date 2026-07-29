@@ -102,6 +102,9 @@ class Recorder(LiveMonitorListener):
         """Called when LiveMonitor detects live start."""
         if self._is_recording:
             return
+        # Refresh before rendering paths / metadata: otherwise the template
+        # variables ({roomid}, {uname}, ...) resolve to empty strings.
+        self.update_info(live.room_info, live.user_info)
         logger.info("Room %d: live started, starting recording", self._room_id)
         self._is_recording = True
         self._statistics.reset()
@@ -164,6 +167,7 @@ class Recorder(LiveMonitorListener):
     def on_room_changed(self, live: Live) -> None:
         """Called when room info changes."""
         logger.debug("Room %d: room changed", self._room_id)
+        self.update_info(live.room_info, live.user_info)
 
     async def stop(self) -> None:
         """Stop recording and clean up.

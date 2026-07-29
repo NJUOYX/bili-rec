@@ -7,6 +7,8 @@ import logging
 from collections import deque
 from typing import Any
 
+from ..bili.danmaku_client import DanmakuClientListener
+from ..bili.typing import Danmaku as RawDanmaku
 from ..event.event_emitter import EventEmitter, EventListener
 
 __all__ = ("RawDanmakuReceiver", "RawDanmakuReceiverListener")
@@ -20,11 +22,14 @@ class RawDanmakuReceiverListener(EventListener):
     """Listener interface for RawDanmakuReceiver events."""
 
 
-class RawDanmakuReceiver(EventEmitter[RawDanmakuReceiverListener]):
+class RawDanmakuReceiver(
+    EventEmitter[RawDanmakuReceiverListener], DanmakuClientListener
+):
     """Bounded async queue for raw danmaku data (JSON dicts from WebSocket).
 
-    Stores raw protocol messages before processing into DanmakuMessage.
-    When the queue is full, oldest messages are dropped.
+    Doubles as a :class:`DanmakuClientListener`, queueing every command
+    verbatim (no filtering) so the JSONL dump is a faithful record of the
+    broadcast. When the queue is full, oldest messages are dropped.
     """
 
     def __init__(self) -> None:
@@ -48,6 +53,10 @@ class RawDanmakuReceiver(EventEmitter[RawDanmakuReceiverListener]):
             self._dropped_count += 1
         self._queue.append(data)
         self._event.set()
+
+    def on_danmaku(self, danmaku: RawDanmaku) -> None:
+        """Queue the command as received."""
+        self.push(danmaku)
 
     async def get(self, timeout: float | None = None) -> dict[str, Any] | None:
         """Get the next raw danmaku dict.

@@ -101,6 +101,16 @@ class StreamRecorder:
         return self._current_video_path
 
     @property
+    def current_danmaku_path(self) -> str:
+        """Danmaku file of the current segment, or "" when not recording."""
+        return self._danmaku_dumper.output_path if self._danmaku_dumper else ""
+
+    @property
+    def current_raw_danmaku_path(self) -> str:
+        """Raw danmaku file of the current segment, or "" when unused."""
+        return self._raw_danmaku_dumper.output_path if self._raw_danmaku_dumper else ""
+
+    @property
     def stream_params(self) -> StreamParamHolder:
         return self._stream_params
 
@@ -215,6 +225,9 @@ class StreamRecorder:
                 self._danmaku_receiver,
                 danmaku_path,
             )
+            # Started here, not at construction: the dumper anchors its
+            # timeline to the recording start and writes into this segment.
+            await self._danmaku_dumper.start()
 
         # Set up raw danmaku dumper
         if self._raw_danmaku_receiver:
@@ -223,6 +236,7 @@ class StreamRecorder:
                 self._raw_danmaku_receiver,
                 raw_path,
             )
+            await self._raw_danmaku_dumper.start()
 
         # Write metadata
         self._metadata_provider.mark_rec_start()
@@ -258,12 +272,12 @@ class StreamRecorder:
 
         # Finalize danmaku
         if self._danmaku_dumper:
-            self._danmaku_dumper.finalize()
+            await self._danmaku_dumper.stop()
             self._danmaku_dumper = None
 
         # Finalize raw danmaku
         if self._raw_danmaku_dumper:
-            self._raw_danmaku_dumper.finalize()
+            await self._raw_danmaku_dumper.stop()
             self._raw_danmaku_dumper = None
 
         logger.info(

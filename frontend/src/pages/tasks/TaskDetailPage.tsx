@@ -2,8 +2,8 @@
  * 任务详情页（frontend-design.md §8/§14.6）。
  *
  * 信息头（主播/房间/直播状态/运行状态 + 单任务操作）+ 标签页：
- * 状态/参数/元数据/Profile/视频/弹幕。子资源响应为无类型 object，
- * 除「状态」用 parseTaskData 结构化展示外，其余以 JSON 视图降级呈现。
+ * 状态/参数/元数据用 Descriptions、视频/弹幕文件明细用表格展示；
+ * Profile 契约上为自由 ffprobe 字典，无固定字段，仍以 JSON 视图呈现。
  */
 import {
   PlayCircleOutlined,
@@ -18,7 +18,9 @@ import {
   Space,
   Spin,
   Switch,
+  Table,
   Tabs,
+  Tag,
   Typography,
 } from 'antd'
 import { useMemo } from 'react'
@@ -37,8 +39,20 @@ import {
   useTaskVideos,
 } from '../../api/endpoints/tasks'
 import { StatusBadge } from '../../components/StatusBadge'
-import { formatBytes, formatDuration, formatRate } from '../../lib/format'
-import { parseTaskData, RUNNING_STATUS_LABELS } from '../../lib/task'
+import {
+  formatBytes,
+  formatDuration,
+  formatRate,
+  formatTimestamp,
+} from '../../lib/format'
+import {
+  type FileDetailView,
+  FILE_STATUS_LABELS,
+  parseFileDetails,
+  parseTaskData,
+  RUNNING_STATUS_LABELS,
+  toFieldEntries,
+} from '../../lib/task'
 
 function JsonView({ data }: { data: unknown }) {
   return (
@@ -55,6 +69,79 @@ function JsonView({ data }: { data: unknown }) {
     >
       {JSON.stringify(data ?? null, null, 2)}
     </pre>
+  )
+}
+
+/** 无类型子资源的键值展示（参数/元数据）。 */
+function FieldsView({ data }: { data: unknown }) {
+  const entries = toFieldEntries(data)
+  if (entries.length === 0) {
+    return <Typography.Text type="secondary">暂无数据</Typography.Text>
+  }
+  return (
+    <Descriptions column={{ xs: 1, sm: 2 }} size="small" bordered>
+      {entries.map(({ key, label, value }) => (
+        <Descriptions.Item key={key} label={label}>
+          {renderFieldValue(key, value)}
+        </Descriptions.Item>
+      ))}
+    </Descriptions>
+  )
+}
+
+function renderFieldValue(key: string, value: unknown) {
+  if (typeof value === 'boolean') return value ? '已启用' : '已停用'
+  if (key.endsWith('_time') && typeof value === 'number') {
+    return formatTimestamp(value)
+  }
+  if (value === null || value === '') return '—'
+  return String(value)
+}
+
+/** 视频/弹幕文件明细表（路径 + 体积 + 状态，设计 §5.10）。 */
+function FilesView({
+  files,
+  empty,
+}: {
+  files: FileDetailView[]
+  empty: string
+}) {
+  return (
+    <Table<FileDetailView>
+      dataSource={files}
+      rowKey="path"
+      size="small"
+      pagination={false}
+      locale={{ emptyText: empty }}
+      columns={[
+        {
+          title: '文件',
+          dataIndex: 'path',
+          // 路径很长，折叠为文件名并保留完整路径供悬停/复制。
+          render: (path: string) => (
+            <Typography.Text copyable={{ text: path }} title={path}>
+              {path.split('/').pop() || path}
+            </Typography.Text>
+          ),
+        },
+        {
+          title: '大小',
+          dataIndex: 'size',
+          width: 120,
+          render: (size: number) => formatBytes(size),
+        },
+        {
+          title: '状态',
+          dataIndex: 'status',
+          width: 120,
+          render: (status: string) => (
+            <Tag color={status === 'recording' ? 'processing' : undefined}>
+              {FILE_STATUS_LABELS[status] ?? status}
+            </Tag>
+          ),
+        },
+      ]}
+    />
   )
 }
 
@@ -82,6 +169,14 @@ export function TaskDetailPage() {
     refreshTask.isPending
 
   const task = useMemo(() => parseTaskData(dataQuery.data), [dataQuery.data])
+  const videos = useMemo(
+    () => parseFileDetails(videosQuery.data, 'videos'),
+    [videosQuery.data],
+  )
+  const danmakus = useMemo(
+    () => parseFileDetails(danmakusQuery.data, 'danmakus'),
+    [danmakusQuery.data],
+  )
   const ok = (label: string) => () => message.success(`${label}成功`)
 
   if (Number.isNaN(roomId)) {
@@ -215,12 +310,12 @@ export function TaskDetailPage() {
             {
               key: 'param',
               label: '参数',
-              children: <JsonView data={paramQuery.data} />,
+              children: <FieldsView data={paramQuery.data} />,
             },
             {
               key: 'metadata',
               label: '元数据',
-              children: <JsonView data={metadataQuery.data} />,
+              children: <FieldsView data={metadataQuery.data} />,
             },
             {
               key: 'profile',
@@ -230,12 +325,16 @@ export function TaskDetailPage() {
             {
               key: 'videos',
               label: '视频',
-              children: <JsonView data={videosQuery.data} />,
+              children: (
+                <FilesView files={videos} empty="未在录制，暂无视频文件" />
+              ),
             },
             {
               key: 'danmakus',
               label: '弹幕',
-              children: <JsonView data={danmakusQuery.data} />,
+              children: (
+                <FilesView files={danmakus} empty="未在录制，暂无弹幕文件" />
+              ),
             },
           ]}
         />

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -133,10 +135,17 @@ class TestBaseHrefMiddleware:
 
 
 class TestRouteRedirectMiddleware:
-    def test_api_not_redirected(self) -> None:
+    @staticmethod
+    def _index(tmp_path: Path) -> Path:
+        """A minimal SPA entry document on disk."""
+        index = tmp_path / "index.html"
+        index.write_text("<html><body>SPA</body></html>", encoding="utf-8")
+        return index
+
+    def test_api_not_redirected(self, tmp_path: Path) -> None:
         """API paths are not redirected."""
         app = FastAPI()
-        app.add_middleware(RouteRedirectMiddleware)
+        app.add_middleware(RouteRedirectMiddleware, index_file=self._index(tmp_path))
 
         @app.get("/api/v1/test")
         async def api_endpoint() -> dict[str, str]:
@@ -146,10 +155,10 @@ class TestRouteRedirectMiddleware:
         resp = client.get("/api/v1/test")
         assert resp.status_code == 200
 
-    def test_static_assets_not_redirected(self) -> None:
+    def test_static_assets_not_redirected(self, tmp_path: Path) -> None:
         """Static asset paths (with extensions) are not redirected."""
         app = FastAPI()
-        app.add_middleware(RouteRedirectMiddleware)
+        app.add_middleware(RouteRedirectMiddleware, index_file=self._index(tmp_path))
 
         @app.get("/static/app.js")
         async def static_js() -> PlainTextResponse:
@@ -159,24 +168,31 @@ class TestRouteRedirectMiddleware:
         resp = client.get("/static/app.js")
         assert resp.status_code == 200
 
-    def test_404_redirects_to_index(self) -> None:
-        """Non-API 404 routes redirect to index.html for SPA routing."""
+    def test_404_serves_index_without_redirect(self, tmp_path: Path) -> None:
+        """Non-API 404 routes get the SPA shell at the requested URL."""
         app = FastAPI()
-        app.add_middleware(RouteRedirectMiddleware)
-
-        @app.get("/index.html")
-        async def index() -> HTMLResponse:
-            return HTMLResponse("<html><body>SPA</body></html>")
+        app.add_middleware(RouteRedirectMiddleware, index_file=self._index(tmp_path))
 
         client = TestClient(app, follow_redirects=False)
         resp = client.get("/some/spa/route", headers={"Accept": "text/html"})
-        assert resp.status_code == 302
-        assert resp.headers["location"] == "/index.html"
+        assert resp.status_code == 200
+        assert "SPA" in resp.text
+        assert "location" not in resp.headers
+        assert resp.url.path == "/some/spa/route"
 
-    def test_non_html_accept_not_redirected(self) -> None:
+    def test_missing_index_leaves_404(self, tmp_path: Path) -> None:
+        """Without a build on disk the 404 is preserved (API-only deploys)."""
+        app = FastAPI()
+        app.add_middleware(RouteRedirectMiddleware, index_file=tmp_path / "absent.html")
+
+        client = TestClient(app, follow_redirects=False)
+        resp = client.get("/some/spa/route", headers={"Accept": "text/html"})
+        assert resp.status_code == 404
+
+    def test_non_html_accept_not_redirected(self, tmp_path: Path) -> None:
         """Requests not accepting HTML are not redirected."""
         app = FastAPI()
-        app.add_middleware(RouteRedirectMiddleware)
+        app.add_middleware(RouteRedirectMiddleware, index_file=self._index(tmp_path))
 
         client = TestClient(app, follow_redirects=False)
         resp = client.get("/some/route", headers={"Accept": "application/json"})

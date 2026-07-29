@@ -1,10 +1,12 @@
 import {
   filterToSelect,
+  parseFileDetails,
   parseTaskData,
   parseTaskStatus,
   parseTasksPage,
   RUNNING_STATUS_LABELS,
   TASK_FILTER_OPTIONS,
+  toFieldEntries,
 } from '../../../src/lib/task'
 import { makeTaskDataRaw } from '../helpers/fixtures'
 
@@ -122,5 +124,40 @@ describe('RUNNING_STATUS_LABELS', () => {
     expect(Object.keys(RUNNING_STATUS_LABELS).sort()).toEqual(
       ['injecting', 'recording', 'remuxing', 'stopped', 'waiting'].sort(),
     )
+  })
+})
+
+describe('parseFileDetails', () => {
+  it('逐字段解析文件明细', () => {
+    const files = parseFileDetails(
+      { danmakus: [{ path: '/a.xml', size: 207, status: 'recording' }] },
+      'danmakus',
+    )
+    expect(files).toEqual([{ path: '/a.xml', size: 207, status: 'recording' }])
+  })
+
+  it('非对象/非数组/畸形条目降级', () => {
+    expect(parseFileDetails(null, 'videos')).toEqual([])
+    expect(parseFileDetails({ videos: 'x' }, 'videos')).toEqual([])
+    expect(parseFileDetails({ videos: [1, { size: 'x' }] }, 'videos')).toEqual([
+      { path: '', size: 0, status: 'unknown' },
+    ])
+  })
+})
+
+describe('toFieldEntries', () => {
+  it('映射已知字段标签、未知字段回退键名', () => {
+    const entries = toFieldEntries({ room_id: 23058, whatever: 'x' })
+    expect(entries).toEqual([
+      { key: 'room_id', label: '房间号', value: 23058 },
+      { key: 'whatever', label: 'whatever', value: 'x' },
+    ])
+  })
+
+  it('丢弃嵌套对象并对非对象返回空列表', () => {
+    expect(toFieldEntries({ a: 1, nested: { b: 2 }, list: [] })).toEqual([
+      { key: 'a', label: 'a', value: 1 },
+    ])
+    expect(toFieldEntries(undefined)).toEqual([])
   })
 })

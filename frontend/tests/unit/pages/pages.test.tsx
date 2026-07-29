@@ -105,11 +105,7 @@ describe('任务详情页', () => {
     expect((await screen.findAllByText('录制中')).length).toBeGreaterThan(0)
     expect(screen.getByText('运行状态')).toBeTruthy()
     fireEvent.click(screen.getByRole('tab', { name: '参数' }))
-    await waitFor(() =>
-      expect(screen.getByTestId('json-view').textContent).toContain(
-        'stream_format',
-      ),
-    )
+    await waitFor(() => expect(screen.getByText('stream_format')).toBeTruthy())
   })
 
   it('无效房间号提示', () => {

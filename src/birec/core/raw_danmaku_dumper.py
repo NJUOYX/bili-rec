@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -39,6 +41,7 @@ class RawDanmakuDumper(AsyncStoppableMixin, EventEmitter[RawDanmakuDumperListene
         self._flush_interval = flush_interval
         self._buffer: list[str] = []
         self._written_count: int = 0
+        self._dump_task: asyncio.Task[None] | None = None
 
     @property
     def output_path(self) -> str:
@@ -49,14 +52,25 @@ class RawDanmakuDumper(AsyncStoppableMixin, EventEmitter[RawDanmakuDumperListene
         return self._written_count
 
     async def _do_start(self) -> None:
-        """Start the dumper loop."""
+        """Prepare the output file and consume the receiver in the background.
+
+        Spawned rather than awaited for the same reason as the XML dumper:
+        ``start()`` holds the lifecycle lock across ``_do_start``.
+        """
         dir_path = os.path.dirname(self._output_path)
         if dir_path:
             os.makedirs(dir_path, exist_ok=True)
-        await self._dump_loop()
+        self._dump_task = asyncio.create_task(self._dump_loop())
 
     async def _do_stop(self) -> None:
-        """Stop the dumper and flush remaining data."""
+        """Stop the loop, then persist whatever is still queued."""
+        if self._dump_task is not None:
+            self._dump_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._dump_task
+            self._dump_task = None
+        for data in self._receiver.drain():
+            self._buffer_data(data)
         self.finalize()
 
     async def _dump_loop(self) -> None:

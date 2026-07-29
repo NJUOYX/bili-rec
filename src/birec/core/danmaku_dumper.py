@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import io
 import logging
 import os
@@ -44,6 +46,7 @@ class DanmakuDumper(AsyncStoppableMixin, EventEmitter[DanmakuDumperListener]):
         self._messages: list[DanmakuMessage] = []
         self._start_time: float = 0.0
         self._written_count: int = 0
+        self._dump_task: asyncio.Task[None] | None = None
 
     @property
     def output_path(self) -> str:
@@ -54,13 +57,28 @@ class DanmakuDumper(AsyncStoppableMixin, EventEmitter[DanmakuDumperListener]):
         return self._written_count
 
     async def _do_start(self) -> None:
-        """Start the dumper loop."""
+        """Write the header and consume the receiver in the background.
+
+        The loop is spawned rather than awaited: ``start()`` holds the lifecycle
+        lock for the whole of ``_do_start``, so awaiting a loop that only ends
+        on stop would deadlock every later ``stop()``.
+        """
         self._start_time = time.time()
         self._write_header()
-        await self._dump_loop()
+        self._dump_task = asyncio.create_task(self._dump_loop())
 
     async def _do_stop(self) -> None:
-        """Stop the dumper and finalize."""
+        """Stop the loop, then persist whatever is still queued."""
+        if self._dump_task is not None:
+            self._dump_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._dump_task
+            self._dump_task = None
+        # The loop may have been cancelled while blocked on ``get``, leaving
+        # messages behind that belong in this file.
+        for msg in self._receiver.drain():
+            self._messages.append(msg)
+            self._written_count += 1
         self.finalize()
 
     async def _dump_loop(self) -> None:

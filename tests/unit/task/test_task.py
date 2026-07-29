@@ -29,8 +29,15 @@ def _make_live() -> MagicMock:
     live.room_id = 12345
     live.room_info = None
     live.user_info = None
+    live.init = AsyncMock()
     live.get_stream_url = AsyncMock(return_value="https://cdn.example.com/live.flv")
     live.get_live_status = AsyncMock(return_value=LiveStatus.LIVE)
+    live.api.get_danmu_info = AsyncMock(
+        return_value={
+            "host_list": [{"host": "broadcastlv.chat.bilibili.com"}, {"host": ""}],
+            "token": "danmu-token",
+        }
+    )
     return live
 
 
@@ -46,6 +53,8 @@ def _make_components() -> dict[str, MagicMock]:
     recorder.is_recording = False
     recorder.stop = AsyncMock()
     recorder.stream_recorder.current_video_path = ""
+    recorder.stream_recorder.current_danmaku_path = ""
+    recorder.stream_recorder.current_raw_danmaku_path = ""
     recorder.stream_recorder.real_stream_format = None
     recorder.stream_recorder.real_quality_number = None
     postprocessor = MagicMock()
@@ -97,6 +106,43 @@ class TestModels:
         assert danmaku.size == 0
 
 
+class TestRecordTaskFileDetails:
+    def test_no_files_while_idle(self) -> None:
+        task, _ = _make_task()
+        assert task.get_videos() == []
+        assert task.get_danmakus() == []
+
+    def test_files_report_real_paths_and_sizes(self, tmp_path: Path) -> None:
+        task, comps = _make_task()
+        video = tmp_path / "a.flv"
+        video.write_bytes(b"x" * 7)
+        danmaku = tmp_path / "a.xml"
+        danmaku.write_text("<i></i>", encoding="utf-8")
+        stream_recorder = comps["recorder"].stream_recorder
+        stream_recorder.current_video_path = str(video)
+        stream_recorder.current_danmaku_path = str(danmaku)
+
+        videos = task.get_videos()
+        assert [(f.path, f.size, f.status) for f in videos] == [
+            (str(video), 7, FileStatus.RECORDING)
+        ]
+        danmakus = task.get_danmakus()
+        assert [(f.path, f.size) for f in danmakus] == [(str(danmaku), 7)]
+
+    def test_raw_danmaku_file_is_listed_too(self, tmp_path: Path) -> None:
+        task, comps = _make_task()
+        stream_recorder = comps["recorder"].stream_recorder
+        stream_recorder.current_danmaku_path = str(tmp_path / "a.xml")
+        stream_recorder.current_raw_danmaku_path = str(tmp_path / "a.jsonl")
+
+        # Neither file exists yet: a size of 0 beats hiding the file entirely.
+        assert [f.size for f in task.get_danmakus()] == [0, 0]
+        assert [Path(f.path).suffix for f in task.get_danmakus()] == [
+            ".xml",
+            ".jsonl",
+        ]
+
+
 class TestRecordTaskStatus:
     def test_properties(self) -> None:
         task, _ = _make_task()
@@ -125,6 +171,26 @@ class TestRecordTaskStatus:
 
 
 class TestRecordTaskLifecycle:
+    async def test_setup_loads_room_info(self) -> None:
+        """Room/user info must be loaded, or the task card renders empty."""
+        task, comps = _make_task()
+        await task.setup()
+        comps["live"].init.assert_awaited_once()
+
+    async def test_setup_feeds_danmaku_hosts(self) -> None:
+        """Without hosts the danmaku client can never open its WebSocket."""
+        task, comps = _make_task()
+        await task.setup()
+        comps["danmaku_client"].set_danmu_info.assert_called_once_with(
+            ["broadcastlv.chat.bilibili.com"], "danmu-token"
+        )
+
+    async def test_setup_feeds_hosts_even_when_monitor_disabled(self) -> None:
+        """A later ``enable_monitor`` must not need a second info fetch."""
+        task, comps = _make_task(enable_monitor=False)
+        await task.setup()
+        comps["danmaku_client"].set_danmu_info.assert_called_once()
+
     async def test_setup_starts_monitoring(self) -> None:
         task, comps = _make_task(enable_monitor=True)
         await task.setup()

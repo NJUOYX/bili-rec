@@ -94,18 +94,22 @@ class FakeBiliServer:
         self.danmaku_ws_connections: list[web.WebSocketResponse] = []
 
     def _setup_routes(self) -> None:
-        self._app.router.add_get(
-            "/xlive/app-room/v1/index/getInfoByRoom",
-            self._handle_get_info_by_room,
-        )
-        self._app.router.add_get(
-            "/xlive/app-room/v2/index/getRoomPlayInfo",
-            self._handle_get_room_play_info,
-        )
-        self._app.router.add_get(
-            "/xlive/app-room/v1/index/getDanmuInfo",
-            self._handle_get_danmu_info,
-        )
+        # Both API platforms are served: ``Live`` defaults to the web platform,
+        # while the stream fetcher rotates to android on failure.
+        for prefix in ("app-room", "web-room"):
+            self._app.router.add_get(
+                f"/xlive/{prefix}/v1/index/getInfoByRoom",
+                self._handle_get_info_by_room,
+            )
+            self._app.router.add_get(
+                f"/xlive/{prefix}/v2/index/getRoomPlayInfo",
+                self._handle_get_room_play_info,
+            )
+            self._app.router.add_get(
+                f"/xlive/{prefix}/v1/index/getDanmuInfo",
+                self._handle_get_danmu_info,
+            )
+        self._app.router.add_get("/x/web-interface/nav", self._handle_nav)
         self._app.router.add_get("/stream.flv", self._handle_stream)
         self._app.router.add_get("/ws/danmaku", self._handle_ws_danmaku)
 
@@ -143,17 +147,24 @@ class FakeBiliServer:
             "data": {
                 "room_info": {
                     "room_id": self.room_id,
+                    "short_id": 0,
                     "uid": 99999,
                     "title": "Test Live Room",
                     "live_status": self.live_status,
                     "live_start_time": 1700000000,
+                    "area_id": 371,
                     "area_name": "测试分区",
+                    "parent_area_id": 11,
                     "parent_area_name": "测试父分区",
+                    "online": 42,
+                    "tags": "test",
+                    "description": "测试直播间",
                     "cover": f"{self.base_url}/cover.jpg",
                 },
                 "anchor_info": {
                     "base_info": {
                         "uname": "TestStreamer",
+                        "gender": "男",
                         "face": f"{self.base_url}/face.jpg",
                     },
                 },
@@ -228,6 +239,22 @@ class FakeBiliServer:
                     }
                 ],
                 "token": "fake_danmaku_token",
+            },
+        }
+        return web.json_response(data)
+
+    async def _handle_nav(self, request: web.Request) -> web.Response:
+        """Serve the WBI key material the web API signs its requests with."""
+        img = "a" * 32
+        sub = "b" * 32
+        data: dict[str, Any] = {
+            "code": 0,
+            "message": "ok",
+            "data": {
+                "wbi_img": {
+                    "img_url": f"https://i0.hdslb.com/bfs/wbi/{img}.png",
+                    "sub_url": f"https://i0.hdslb.com/bfs/wbi/{sub}.png",
+                },
             },
         }
         return web.json_response(data)

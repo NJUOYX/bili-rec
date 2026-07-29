@@ -131,12 +131,15 @@ def _mount_frontend(
 
     href = base_href if base_href is not None else os.environ.get("BIREC_BASE_HREF")
 
-    # SPA fallback: non-API/-WS, extension-less GET that 404s → index.html.
-    app.add_middleware(RouteRedirectMiddleware)
-    # ``<base href>`` injection only for a real sub-path (outermost, so it
-    # rewrites every HTML response including the fallback index).
-    if href and href.strip("/"):
-        app.add_middleware(BaseHrefMiddleware, base_href=href)
+    # SPA fallback: non-API/-WS, extension-less GET that 404s → index.html
+    # served in place, so deep links survive refresh and bookmarks.
+    app.add_middleware(RouteRedirectMiddleware, index_file=directory / "index.html")
+    # ``<base href>`` is always injected (outermost, so it rewrites every HTML
+    # response including the fallback index). The build emits *relative* asset
+    # URLs, which would resolve against the requested directory and 404 on a
+    # nested deep link such as ``/tasks/new``; an explicit base anchors them to
+    # the deployment root, defaulting to ``/`` when no sub-path is configured.
+    app.add_middleware(BaseHrefMiddleware, base_href=href or "/")
 
     # Mount last so API/WS routers registered earlier take precedence.
     app.mount("/", StaticFiles(directory=str(directory), html=True), name="frontend")

@@ -164,8 +164,15 @@ class LiveMonitor(SwitchableMixin, EventEmitter[LiveMonitorListener]):
     # --- Periodic Status Check (Fallback) ---
 
     async def _periodic_check_loop(self) -> None:
-        """Periodically re-check live status as fallback (~600s ± 60s)."""
+        """Reconcile status once, then re-check periodically (~600s ± 60s).
+
+        The upfront check matters for rooms that are *already* live when the
+        monitor is enabled (a task added mid-stream, or a restart): the danmaku
+        server only pushes future transitions, so without it the room would look
+        offline until the first interval elapses.
+        """
         try:
+            await self._check_status()
             while self.enabled:
                 jitter = random.uniform(-_PERIODIC_CHECK_JITTER, _PERIODIC_CHECK_JITTER)
                 await asyncio.sleep(_PERIODIC_CHECK_INTERVAL + jitter)
