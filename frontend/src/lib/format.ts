@@ -42,3 +42,14 @@ export function toPercent(ratio: number): number {
   if (ratio >= 1) return 100
   return Math.round(ratio * 100)
 }
+
+/** Unix 秒 → 本地日期时间；后端用 0 表示「未开播/未知」，此时给出占位符。 */
+export function formatTimestamp(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '—'
+  const d = new Date(seconds * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  )
+}

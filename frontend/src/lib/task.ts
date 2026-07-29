@@ -169,3 +169,74 @@ export type TaskFilter = (typeof TASK_FILTER_OPTIONS)[number]['value']
 export function filterToSelect(filter: TaskFilter): string | undefined {
   return filter === 'all' ? undefined : filter
 }
+
+/** 文件明细（`VideoFileDetail` / `DanmakuFileDetail`）的运行时视图。 */
+export interface FileDetailView {
+  path: string
+  size: number
+  status: string
+}
+
+/** 文件状态 → 中文标签（task/__init__.py::FileStatus）。 */
+export const FILE_STATUS_LABELS: Record<string, string> = {
+  recording: '录制中',
+  remuxing: '混流中',
+  injecting: '注入中',
+  completed: '已完成',
+  missing: '文件缺失',
+  unknown: '未知',
+}
+
+/**
+ * 解析 `{videos: [...]}` / `{danmakus: [...]}` 响应为文件明细列表。
+ *
+ * 与 `parseTaskData` 同样的降级策略：非数组或畸形条目直接忽略，
+ * 单条缺字段回退后端 dataclass 默认值。
+ */
+export function parseFileDetails(data: unknown, key: string): FileDetailView[] {
+  if (!isRecord(data)) return []
+  const items = data[key]
+  if (!Array.isArray(items)) return []
+  return items.filter(isRecord).map((item) => ({
+    path: str(item.path),
+    size: num(item.size),
+    status: str(item.status, 'unknown'),
+  }))
+}
+
+/** 任务参数/元数据字段 → 中文标签（未知字段回退原始键名）。 */
+export const TASK_FIELD_LABELS: Record<string, string> = {
+  room_id: '房间号',
+  enable_monitor: '监控',
+  enable_recorder: '录制器',
+  user_name: '主播',
+  room_title: '标题',
+  area: '分区',
+  parent_area: '父分区',
+  live_start_time: '开播时间',
+  cover_url: '封面',
+}
+
+/** 键值对视图（供 Descriptions 渲染）。 */
+export interface FieldEntry {
+  key: string
+  label: string
+  value: unknown
+}
+
+/**
+ * 将无类型的子资源响应摊平为有序键值对。
+ *
+ * 契约只声明 object（openapi.json），因此按响应实际返回的键渲染，而不是写死
+ * 字段列表：后端新增字段会自动出现，缺失字段自动消失。
+ */
+export function toFieldEntries(data: unknown): FieldEntry[] {
+  if (!isRecord(data)) return []
+  return Object.entries(data)
+    .filter(([, value]) => typeof value !== 'object' || value === null)
+    .map(([key, value]) => ({
+      key,
+      label: TASK_FIELD_LABELS[key] ?? key,
+      value,
+    }))
+}

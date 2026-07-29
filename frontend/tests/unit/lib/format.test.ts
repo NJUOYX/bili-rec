@@ -2,6 +2,7 @@ import {
   formatBytes,
   formatDuration,
   formatRate,
+  formatTimestamp,
   toPercent,
 } from '../../../src/lib/format'
 
@@ -63,5 +64,18 @@ describe('toPercent', () => {
     expect(toPercent(-0.5)).toBe(0)
     expect(toPercent(1.5)).toBe(100)
     expect(toPercent(Number.NaN)).toBe(0)
+  })
+})
+
+describe('formatTimestamp', () => {
+  it('Unix 秒 → 本地日期时间', () => {
+    const seconds = new Date(2026, 6, 29, 14, 5, 3).getTime() / 1000
+    expect(formatTimestamp(seconds)).toBe('2026-07-29 14:05:03')
+  })
+
+  it('0/负数/非法值 → 占位符', () => {
+    expect(formatTimestamp(0)).toBe('—')
+    expect(formatTimestamp(-1)).toBe('—')
+    expect(formatTimestamp(Number.NaN)).toBe('—')
   })
 })

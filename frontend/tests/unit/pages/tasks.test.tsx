@@ -9,6 +9,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { beforeEach, describe, expect, it } from 'vitest'
 
+import { formatTimestamp } from '../../../src/lib/format'
 import { makeTaskDataRaw, makeTasksPageResponse } from '../helpers/fixtures'
 import { setupMswServer } from '../helpers/msw'
 import { renderRoute } from '../helpers/render'
@@ -45,11 +46,30 @@ const server = setupMswServer(
   http.get('*/api/v1/tasks/:roomId/data', ({ params }) =>
     ok(makeTaskDataRaw({ room_id: Number(params.roomId) })),
   ),
-  http.get('*/api/v1/tasks/:roomId/param', () => ok({ stream_format: 'flv' })),
-  http.get('*/api/v1/tasks/:roomId/metadata', () => ok({ title: 'x' })),
+  http.get('*/api/v1/tasks/:roomId/param', () =>
+    ok({ stream_format: 'flv', enable_monitor: true, enable_recorder: false }),
+  ),
+  http.get('*/api/v1/tasks/:roomId/metadata', () =>
+    ok({ title: 'x', live_start_time: 1700000000, cover_url: '' }),
+  ),
   http.get('*/api/v1/tasks/:roomId/profile', () => ok({ quality: 10000 })),
-  http.get('*/api/v1/tasks/:roomId/videos', () => ok({ videos: [] })),
-  http.get('*/api/v1/tasks/:roomId/danmakus', () => ok({ danmakus: [] })),
+  http.get('*/api/v1/tasks/:roomId/videos', () =>
+    ok({
+      videos: [
+        { path: '/rec/23058/a.flv', size: 2048, status: 'recording' },
+        // 后端畸形条目应降级而非崩溃。
+        { size: 'x' },
+      ],
+    }),
+  ),
+  http.get('*/api/v1/tasks/:roomId/danmakus', () =>
+    ok({
+      danmakus: [
+        { path: '/rec/23058/a.xml', size: 207, status: 'recording' },
+        { path: '/rec/23058/a.jsonl', size: 0, status: 'unknown' },
+      ],
+    }),
+  ),
   // 单任务操作
   http.post('*/api/v1/tasks/:roomId/start', okHit('start')),
   http.post('*/api/v1/tasks/:roomId/stop', okHit('stop')),
@@ -164,21 +184,53 @@ describe('任务详情页 · 操作与标签页', () => {
     await waitFor(() => expect(calls.recDisable).toBe(1))
   })
 
-  it('切换各标签页渲染 JSON 视图', async () => {
+  it('各标签页结构化展示子资源', async () => {
     renderRoute(['/tasks/23058'])
     await screen.findAllByText('录制中')
-    for (const [tab, needle] of [
-      ['元数据', 'title'],
-      ['Profile', 'quality'],
-      ['视频', 'videos'],
-      ['弹幕', 'danmakus'],
-    ] as const) {
-      fireEvent.click(screen.getByRole('tab', { name: tab }))
-      await waitFor(() => {
-        const views = screen.getAllByTestId('json-view')
-        expect(views.some((v) => v.textContent?.includes(needle))).toBe(true)
-      })
-    }
+
+    // 元数据：未映射的字段回退原始键名作标签；时间戳/空值可读化。
+    fireEvent.click(screen.getByRole('tab', { name: '元数据' }))
+    expect(await screen.findByText('title')).toBeTruthy()
+    expect(screen.getByText(formatTimestamp(1700000000))).toBeTruthy()
+    expect(screen.getByText('—')).toBeTruthy()
+
+    // 参数：布尔值渲染为启用/停用。
+    fireEvent.click(screen.getByRole('tab', { name: '参数' }))
+    expect(await screen.findByText('已启用')).toBeTruthy()
+    expect(screen.getByText('已停用')).toBeTruthy()
+
+    // Profile 无固定字段，仍为 JSON 视图。
+    fireEvent.click(screen.getByRole('tab', { name: 'Profile' }))
+    await waitFor(() => {
+      const views = screen.getAllByTestId('json-view')
+      expect(views.some((v) => v.textContent?.includes('quality'))).toBe(true)
+    })
+
+    // 视频：文件名 + 可读体积 + 状态标签。
+    fireEvent.click(screen.getByRole('tab', { name: '视频' }))
+    expect(await screen.findByText('a.flv')).toBeTruthy()
+    expect(screen.getByText('2.0 KB')).toBeTruthy()
+
+    // 弹幕：.xml 与 .jsonl 两条均列出。
+    fireEvent.click(screen.getByRole('tab', { name: '弹幕' }))
+    expect(await screen.findByText('a.xml')).toBeTruthy()
+    expect(screen.getByText('a.jsonl')).toBeTruthy()
+    // 视频页签的畸形条目同样降级为「未知」，故此处可能有多处命中。
+    expect(screen.getAllByText('未知').length).toBeGreaterThan(0)
+  })
+
+  it('未录制时文件明细展示空态', async () => {
+    server.use(
+      http.get('*/api/v1/tasks/:roomId/danmakus', () => ok({ danmakus: [] })),
+      http.get('*/api/v1/tasks/:roomId/param', () => ok({})),
+    )
+    renderRoute(['/tasks/23058'])
+    await screen.findAllByText('录制中')
+    fireEvent.click(screen.getByRole('tab', { name: '弹幕' }))
+    expect(await screen.findByText('未在录制，暂无弹幕文件')).toBeTruthy()
+    // 空响应的键值页签同样需降级而非渲染空表。
+    fireEvent.click(screen.getByRole('tab', { name: '参数' }))
+    expect(await screen.findByText('暂无数据')).toBeTruthy()
   })
 
   it('未开播任务展示启动按钮', async () => {
