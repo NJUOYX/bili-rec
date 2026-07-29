@@ -15,11 +15,12 @@ export default defineConfig({
     },
   },
   // 单测：jsdom 环境 + 全局 API（见 frontend-design.md §10.3）。
-  // 覆盖率门禁全局 ≥80%；生成物与入口壳不计入统计。
+  // 覆盖率门禁全局 ≥80%；核心（api/ws/pages/tasks）≥85%。
   test: {
     globals: true,
     environment: 'jsdom',
     setupFiles: ['tests/unit/setup.ts'],
+    // 仅收集单测；E2E（tests/e2e，Playwright）由独立 runner 执行。
     include: ['tests/unit/**/*.test.{ts,tsx}'],
     // AntD 重型页面（多分组表单）在 CI 较慢，放宽超时避免偶发超时抖动。
     testTimeout: 15000,
@@ -28,11 +29,25 @@ export default defineConfig({
       reporter: ['text', 'html', 'json-summary'],
       include: ['src/**/*.{ts,tsx}'],
       exclude: ['src/main.tsx', 'src/**/*.d.ts', 'src/api/schema.d.ts'],
+      // 全局 ≥80%；核心目录 ≥85%（frontend-design.md §10.3）。
       thresholds: {
         lines: 80,
         functions: 80,
         branches: 80,
         statements: 80,
+        'src/api/**': {
+          lines: 85,
+          functions: 85,
+          branches: 85,
+          statements: 85,
+        },
+        'src/ws/**': { lines: 85, functions: 85, branches: 85, statements: 85 },
+        'src/pages/tasks/**': {
+          lines: 85,
+          functions: 85,
+          branches: 85,
+          statements: 85,
+        },
       },
     },
   },
