@@ -13,8 +13,24 @@ body {
   min-height: 100vh;
 }
 
-.app-shell {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 2rem 1.5rem;
+/* 录制中任务卡片主色呼吸描边（§14.6）。 */
+.task-card--recording {
+  animation: task-card-breathing 2.4s ease-in-out infinite;
+}
+
+@keyframes task-card-breathing {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px var(--ant-color-primary, #1677ff);
+  }
+  50% {
+    box-shadow: 0 0 8px 2px var(--ant-color-primary, #1677ff);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-card--recording {
+    animation: none;
+    box-shadow: 0 0 0 1px var(--ant-color-primary, #1677ff);
+  }
 }
