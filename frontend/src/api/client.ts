@@ -127,3 +127,31 @@ export function createApiClient(baseUrl: string = defaultBaseUrl()) {
 
 /** 应用级单例客户端。 */
 export const api = createApiClient()
+
+/**
+ * 执行请求并返回完整 ResponseMessage（不因 code !== 0 抛错）。
+ *
+ * 用于状态即业务码的接口（如扫码登录轮询：86101 未扫码 / 86038 失效
+ * 等本质为「进行中状态」而非错误），由调用方按 code 驱动 UI。
+ * 仍对 fetch 层异常与非统一体载荷抛 ApiError。
+ */
+export async function callResponse(
+  request: () => Promise<FetchResult>,
+): Promise<ResponseMessage> {
+  let result: FetchResult
+  try {
+    result = await request()
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : 'Network error'
+    throw new ApiError(-1, message, 'network', { cause })
+  }
+  const body = result.data ?? result.error
+  if (isResponseMessage(body)) return body
+  if (!result.response.ok) {
+    throw new ApiError(
+      result.response.status,
+      `HTTP ${result.response.status} ${result.response.statusText}`.trim(),
+    )
+  }
+  throw new ApiError(-1, 'Malformed response body (expected ResponseMessage)')
+}
