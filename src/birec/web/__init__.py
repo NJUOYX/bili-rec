@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from .middleware import BaseHrefMiddleware, RouteRedirectMiddleware
 from .models import ResponseMessage
@@ -20,11 +23,25 @@ __all__ = (
 )
 
 
-def create_app() -> FastAPI:
+def create_app(
+    *,
+    static_dir: Path | None = None,
+    base_href: str | None = None,
+) -> FastAPI:
     """Create and configure the FastAPI application.
 
+    Args:
+        static_dir: Directory of the built frontend (``index.html`` + assets).
+            When ``None`` it is resolved from ``BIREC_STATIC_DIR`` env or the
+            bundled ``web/static`` directory; if no ``index.html`` is present
+            the app runs API-only (no static hosting).
+        base_href: Sub-path for reverse-proxy deploys (e.g. ``/birec``). When
+            ``None`` it is resolved from ``BIREC_BASE_HREF`` env. A non-root
+            value enables ``<base href>`` injection into served HTML.
+
     Returns:
-        Configured FastAPI app with routes, middleware, and handlers.
+        Configured FastAPI app with routes, middleware, handlers, and — when a
+        frontend build is available — SPA static hosting with route fallback.
     """
     app = FastAPI(
         title="bili-rec",
@@ -46,6 +63,9 @@ def create_app() -> FastAPI:
 
     # Register routes
     _register_routes(app)
+
+    # Mount the built frontend (SPA) when available (§12).
+    _mount_frontend(app, static_dir=static_dir, base_href=base_href)
 
     return app
 
@@ -81,3 +101,42 @@ def _register_routes(app: FastAPI) -> None:
 
     # WebSocket routes
     app.include_router(ws_router)
+
+
+def _resolve_static_dir(static_dir: Path | None) -> Path:
+    """Resolve the frontend static directory (explicit → env → bundled)."""
+    if static_dir is not None:
+        return static_dir
+    env_dir = os.environ.get("BIREC_STATIC_DIR")
+    if env_dir:
+        return Path(env_dir)
+    # Bundled default: ``birec/web/static`` (populated by the build/Docker stage).
+    return Path(__file__).parent / "static"
+
+
+def _mount_frontend(
+    app: FastAPI,
+    *,
+    static_dir: Path | None,
+    base_href: str | None,
+) -> None:
+    """Serve the built frontend with SPA route fallback and ``<base href>``.
+
+    No-op when no ``index.html`` is found, keeping the app API-only for dev and
+    tests that do not ship a frontend build.
+    """
+    directory = _resolve_static_dir(static_dir)
+    if not (directory / "index.html").is_file():
+        return
+
+    href = base_href if base_href is not None else os.environ.get("BIREC_BASE_HREF")
+
+    # SPA fallback: non-API/-WS, extension-less GET that 404s → index.html.
+    app.add_middleware(RouteRedirectMiddleware)
+    # ``<base href>`` injection only for a real sub-path (outermost, so it
+    # rewrites every HTML response including the fallback index).
+    if href and href.strip("/"):
+        app.add_middleware(BaseHrefMiddleware, base_href=href)
+
+    # Mount last so API/WS routers registered earlier take precedence.
+    app.mount("/", StaticFiles(directory=str(directory), html=True), name="frontend")

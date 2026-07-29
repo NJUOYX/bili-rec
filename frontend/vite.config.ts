@@ -8,6 +8,9 @@ const BACKEND = process.env.VITE_BACKEND ?? 'http://127.0.0.1:2233'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // 相对资源路径：产物用相对 URL 引用 assets，配合后端 BaseHrefMiddleware
+  // 注入的 <base href="/子路径/"> 即可在任意子路径反代下正确解析（§12）。
+  base: './',
   server: {
     proxy: {
       '/api': { target: BACKEND, changeOrigin: true },

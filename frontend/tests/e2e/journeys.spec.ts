@@ -26,11 +26,20 @@ test.describe('任务模块旅程', () => {
     await page.getByRole('button', { name: /^添\s*加$/ }).click()
     await expect(page).toHaveURL(/\/tasks$/)
 
-    // 进入详情并停止任务。
-    await page.goto('/tasks/23058')
+    // 点击卡片标题客户端路由进入详情（相对 base 下深链整页重载会错误解析
+    // 资源，真实部署由后端 RouteRedirectMiddleware 302→/index.html 消解；
+    // E2E 走真实用户的客户端导航路径）。
+    await page
+      .getByTestId('task-card')
+      .first()
+      .getByRole('button', { name: '哔哩哔哩音悦台' })
+      .click()
+    await expect(page).toHaveURL(/\/tasks\/23058$/)
     await expect(page.getByText('录制中').first()).toBeVisible()
-    await page.getByRole('button', { name: /停\s*止/ }).click()
-    // 停止后仍停留在详情页（无异常）。
+
+    // 停止任务：详情页单任务「停止」（图标 aria 使可及名为 “stop 停止”），
+    // 锚定排除列表批量的「全部停止」。停止后仍停留在详情页（无异常）。
+    await page.getByRole('button', { name: /^(?:stop\s*)?停\s*止$/ }).click()
     await expect(page).toHaveURL(/\/tasks\/23058$/)
   })
 })
