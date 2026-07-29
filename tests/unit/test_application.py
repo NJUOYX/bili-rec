@@ -103,6 +103,40 @@ class TestTaskFactory:
         assert task.live.cookie == "global"
         assert task.monitor_enabled
 
+    async def test_factory_wires_danmaku_pipeline(
+        self, application: Application
+    ) -> None:
+        """The receiver must be both a client listener and the dumper's source.
+
+        Miss either half and recording silently produces an empty .xml file.
+        """
+        await application.startup()
+        try:
+            task = application._create_task(23058)  # noqa: SLF001
+        finally:
+            await application.shutdown()
+
+        receiver = task.recorder.stream_recorder._danmaku_receiver  # noqa: SLF001
+        assert receiver is not None
+        assert receiver in task._danmaku_client._listeners  # noqa: SLF001
+
+    async def test_raw_danmaku_receiver_follows_the_setting(
+        self, application: Application
+    ) -> None:
+        """Raw JSONL output is opt-in, so the receiver only exists when asked."""
+        await application.startup()
+        try:
+            off = application._create_task(23058)  # noqa: SLF001
+            application.settings_manager.settings.danmaku.save_raw_danmaku = True
+            on = application._create_task(23059)  # noqa: SLF001
+        finally:
+            await application.shutdown()
+
+        assert off.recorder.stream_recorder._raw_danmaku_receiver is None  # noqa: SLF001
+        raw = on.recorder.stream_recorder._raw_danmaku_receiver  # noqa: SLF001
+        assert raw is not None
+        assert raw in on._danmaku_client._listeners  # noqa: SLF001
+
 
 class TestSessionLifecycle:
     async def test_session_created_and_closed(self, application: Application) -> None:
