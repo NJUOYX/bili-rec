@@ -21,6 +21,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['tests/unit/setup.ts'],
     include: ['tests/unit/**/*.test.{ts,tsx}'],
+    // AntD 重型页面（多分组表单）在 CI 较慢，放宽超时避免偶发超时抖动。
+    testTimeout: 15000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'json-summary'],
