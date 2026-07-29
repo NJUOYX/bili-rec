@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import FileResponse, Response
 
 __all__ = ("BaseHrefMiddleware", "RouteRedirectMiddleware")
 
@@ -54,25 +55,42 @@ class BaseHrefMiddleware(BaseHTTPMiddleware):
         return Response(
             content=body,
             status_code=response.status_code,
-            headers=dict(response.headers),
+            headers=self._headers_without_length(response),
             media_type=response.media_type,
         )
 
+    @staticmethod
+    def _headers_without_length(response: Response) -> dict[str, str]:
+        """Copy headers minus ``content-length``, which injection invalidates.
+
+        ``Response`` only computes ``content-length`` when absent from the
+        given headers, so passing the upstream value through would understate
+        the injected body and make real clients truncate the document.
+        """
+        return {
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() != "content-length"
+        }
+
 
 class RouteRedirectMiddleware(BaseHTTPMiddleware):
-    """Redirect non-API routes to ``index.html`` for SPA frontend routing.
+    """Serve ``index.html`` in place for SPA deep links (§12).
 
     Any GET request that:
     - does NOT start with ``/api/`` or ``/ws/``
     - does NOT have a file extension (e.g. ``.js``, ``.css``)
     - accepts ``text/html``
 
-    is redirected to ``/index.html`` so the frontend router can handle it.
+    and 404s downstream is answered with the SPA entry document **at the
+    originally requested URL** (HTTP 200). Redirecting to ``/index.html``
+    instead would discard the deep link, leaving the client-side router with
+    no way to restore the requested route on refresh or bookmark entry.
     """
 
-    def __init__(self, app: Any, index_path: str = "/index.html") -> None:
+    def __init__(self, app: Any, index_file: Path | str) -> None:
         super().__init__(app)
-        self._index_path = index_path
+        self._index_file = Path(index_file)
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -87,7 +105,7 @@ class RouteRedirectMiddleware(BaseHTTPMiddleware):
         if "." in path.split("/")[-1]:
             return await call_next(request)
 
-        # Only redirect GET requests that accept HTML
+        # Only rewrite GET requests that accept HTML
         if request.method != "GET":
             return await call_next(request)
 
@@ -98,10 +116,10 @@ class RouteRedirectMiddleware(BaseHTTPMiddleware):
         # Try the original path first
         response = await call_next(request)
 
-        # If 404, redirect to index.html for SPA routing
-        if response.status_code == 404:
-            from starlette.responses import RedirectResponse
-
-            return RedirectResponse(self._index_path, status_code=302)
+        # Unknown route → hand the SPA shell back without changing the URL.
+        if response.status_code == 404 and self._index_file.is_file():
+            return FileResponse(
+                self._index_file, status_code=200, media_type="text/html"
+            )
 
         return response

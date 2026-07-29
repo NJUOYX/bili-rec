@@ -12,7 +12,10 @@ from birec.web import (
     create_app,
 )
 
-INDEX_HTML = "<html><head></head><body>BIREC-APP</body></html>"
+INDEX_HTML = (
+    '<html><head></head><body>BIREC-APP<script src="./assets/app.js"></script>'
+    "</body></html>"
+)
 
 
 @pytest.fixture
@@ -48,13 +51,24 @@ class TestStaticHosting:
         assert resp.status_code == 200
         assert "birec" in resp.text
 
-    def test_spa_deep_link_falls_back_to_index(self, dist: Path) -> None:
-        """Extension-less HTML GET that 404s → 302 to /index.html (§5.14)."""
+    def test_spa_deep_link_served_in_place(self, dist: Path) -> None:
+        """Extension-less HTML GET that 404s → index.html at the same URL (§12)."""
         app = create_app(static_dir=dist)
         client = TestClient(app, follow_redirects=False)
         resp = client.get("/tasks/23058", headers={"Accept": "text/html"})
-        assert resp.status_code == 302
-        assert resp.headers["location"] == "/index.html"
+        assert resp.status_code == 200
+        assert "BIREC-APP" in resp.text
+        # The deep link must survive: no redirect away from the requested path.
+        assert "location" not in resp.headers
+        assert resp.url.path == "/tasks/23058"
+
+    def test_spa_deep_link_preserves_query_string(self, dist: Path) -> None:
+        """Fallback keeps the query string for the client-side router."""
+        app = create_app(static_dir=dist)
+        client = TestClient(app, follow_redirects=False)
+        resp = client.get("/tasks?status=recording", headers={"Accept": "text/html"})
+        assert resp.status_code == 200
+        assert resp.url.query == b"status=recording"
 
     def test_api_namespace_not_shadowed(self, dist: Path) -> None:
         """Unknown API path still yields JSON 404 (not the SPA fallback)."""
@@ -71,11 +85,44 @@ class TestStaticHosting:
         assert resp.status_code == 200
         assert '<base href="/birec/">' in resp.text
 
-    def test_no_base_href_at_root(self, dist: Path) -> None:
+    def test_base_href_recomputes_content_length(self, dist: Path) -> None:
+        """Injection must refresh ``content-length`` or clients truncate HTML."""
+        app = create_app(static_dir=dist, base_href="/birec")
+        client = TestClient(app)
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert int(resp.headers["content-length"]) == len(resp.content)
+        assert len(resp.content) > len(INDEX_HTML)
+
+    def test_base_href_injected_into_deep_link_fallback(self, dist: Path) -> None:
+        """The SPA shell served for a deep link also carries ``<base href>``."""
+        app = create_app(static_dir=dist, base_href="/birec")
+        client = TestClient(app, follow_redirects=False)
+        resp = client.get("/tasks/23058", headers={"Accept": "text/html"})
+        assert resp.status_code == 200
+        assert '<base href="/birec/">' in resp.text
+        assert int(resp.headers["content-length"]) == len(resp.content)
+
+    def test_base_href_defaults_to_root(self, dist: Path) -> None:
+        """Root deployments still get ``<base href="/">``.
+
+        The build emits relative asset URLs (``./assets/...``); without a base
+        they resolve against the requested directory, so a nested deep link
+        like ``/tasks/new`` would fetch ``/tasks/assets/...`` and 404.
+        """
         app = create_app(static_dir=dist, base_href="")
         client = TestClient(app)
         resp = client.get("/")
-        assert "<base" not in resp.text
+        assert '<base href="/">' in resp.text
+
+    def test_nested_deep_link_anchors_assets_to_root(self, dist: Path) -> None:
+        """A two-segment deep link keeps relative assets pointing at the root."""
+        app = create_app(static_dir=dist, base_href="")
+        client = TestClient(app, follow_redirects=False)
+        resp = client.get("/tasks/new", headers={"Accept": "text/html"})
+        assert resp.status_code == 200
+        assert '<base href="/">' in resp.text
+        assert int(resp.headers["content-length"]) == len(resp.content)
 
 
 class TestResolveStaticDir:
