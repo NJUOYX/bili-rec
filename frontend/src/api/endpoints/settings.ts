@@ -1,7 +1,7 @@
 /**
  * 设置域 hooks（frontend-design.md §6.1 / §8.1）。
  *
- * FM1 覆盖全局设置读写；任务级设置（null 回退语义）随 M31 设置模块补充。
+ * 覆盖全局设置与任务级设置（null 回退语义）读写。
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -30,6 +30,42 @@ export function usePatchSettings() {
       call(() => api.PATCH('/api/v1/settings', { body: body as never })),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.settings() })
+    },
+  })
+}
+
+/** 任务级设置（GET /settings/tasks/{room_id}）。 */
+export function useTaskSettings(roomId: number) {
+  return useQuery({
+    queryKey: queryKeys.taskSettings(roomId),
+    queryFn: () =>
+      call(() =>
+        api.GET('/api/v1/settings/tasks/{room_id}', {
+          params: { path: { room_id: roomId } },
+        }),
+      ),
+    enabled: Number.isFinite(roomId),
+  })
+}
+
+/**
+ * 更新任务级设置（PATCH /settings/tasks/{room_id}），成功后失效该任务设置缓存。
+ * 契约缺口同 usePatchSettings，以 never 断言透传 body。
+ */
+export function usePatchTaskSettings(roomId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      call(() =>
+        api.PATCH('/api/v1/settings/tasks/{room_id}', {
+          params: { path: { room_id: roomId } },
+          body: body as never,
+        }),
+      ),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.taskSettings(roomId),
+      })
     },
   })
 }
