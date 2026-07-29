@@ -21,6 +21,8 @@ from birec.core.stream_recorder import StreamRecorder
 def _make_live() -> MagicMock:
     live = MagicMock()
     live.room_id = 12345
+    live.room_info = _make_room_info()
+    live.user_info = _make_user_info()
     live.get_stream_url = AsyncMock(return_value="https://cdn.example.com/live.flv")
     live.select_alternative = AsyncMock(
         return_value="https://cdn2.example.com/live.flv"
@@ -137,6 +139,25 @@ class TestRecorder:
         recorder.on_live_began(recorder._live)
         await asyncio.sleep(0.01)  # Let task run
         assert recorder.is_recording is True
+
+    @pytest.mark.asyncio
+    async def test_on_live_began_refreshes_info(self, recorder, tmp_path):
+        """Paths are rendered at recording start, so info must land first."""
+        recorder._path_provider._path_template = "{roomid} - {uname}/rec"
+        recorder.on_live_began(recorder._live)
+        assert recorder._path_provider.render().startswith(
+            f"{tmp_path}/12345 - Streamer/rec"
+        )
+        await recorder.stop()
+
+    def test_on_room_changed_refreshes_info(self, recorder, tmp_path):
+        """A renamed room/streamer must be reflected in later paths."""
+        recorder._live.room_info = _make_room_info().model_copy(
+            update={"room_id": 54321}
+        )
+        recorder._path_provider._path_template = "{roomid}/rec"
+        recorder.on_room_changed(recorder._live)
+        assert recorder._path_provider.render().startswith(f"{tmp_path}/54321/rec")
 
     @pytest.mark.asyncio
     async def test_on_live_started_idempotent(self, recorder):
