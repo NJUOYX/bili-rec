@@ -14,7 +14,9 @@ from birec.bili.danmaku_client import DanmakuClient
 from birec.bili.live import Live
 from birec.bili.live_monitor import LiveMonitor
 from birec.core.cover_downloader import CoverDownloader
+from birec.core.danmaku_receiver import DanmakuReceiver
 from birec.core.path_provider import PathProvider
+from birec.core.raw_danmaku_receiver import RawDanmakuReceiver
 from birec.core.recorder import Recorder
 from birec.event import EventCenter
 from birec.exception import ExceptionCenter
@@ -147,12 +149,27 @@ class Application:
         save_cover = _pick(
             task.recorder.save_cover if task else None, settings.recorder.save_cover
         )
+        # The receivers are the danmaku client's listeners: the client only
+        # broadcasts, so without this registration nothing would ever reach the
+        # dumpers and the .xml/.jsonl files would stay empty (§3.3).
+        danmaku_receiver = DanmakuReceiver()
+        danmaku_client.add_listener(danmaku_receiver)
+        save_raw = _pick(
+            task.danmaku.save_raw_danmaku if task else None,
+            settings.danmaku.save_raw_danmaku,
+        )
+        raw_danmaku_receiver: RawDanmakuReceiver | None = None
+        if save_raw:
+            raw_danmaku_receiver = RawDanmakuReceiver()
+            danmaku_client.add_listener(raw_danmaku_receiver)
         recorder = Recorder(
             room_id,
             live,
             monitor,
             self._session,
             path_provider,
+            danmaku_receiver=danmaku_receiver,
+            raw_danmaku_receiver=raw_danmaku_receiver,
             cover_downloader=CoverDownloader(self._session) if save_cover else None,
         )
 
