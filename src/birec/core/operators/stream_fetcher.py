@@ -13,6 +13,16 @@ logger = logging.getLogger(__name__)
 
 _CHUNK_SIZE = 64 * 1024  # 64KB
 
+# Headers required by Bilibili CDN anti-hotlinking.
+_STREAM_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://live.bilibili.com/",
+    "Origin": "https://live.bilibili.com",
+}
+
 
 class StreamFetcher:
     """Fetches stream data from a URL, yielding chunks asynchronously."""
@@ -53,7 +63,9 @@ class StreamFetcher:
         self._current_url = url
         self._bytes_fetched = 0
 
-        async with self._session.get(url, timeout=self._timeout) as resp:
+        async with self._session.get(
+            url, timeout=self._timeout, headers=_STREAM_HEADERS
+        ) as resp:
             resp.raise_for_status()
             async for chunk in resp.content.iter_chunked(self._chunk_size):
                 self._bytes_fetched += len(chunk)
