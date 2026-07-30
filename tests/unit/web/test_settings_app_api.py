@@ -97,6 +97,49 @@ class TestPatchSettings:
         body = resp.json()
         assert body["code"] == 0
 
+    async def test_patch_out_dir_propagates_to_existing_tasks(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        """Regression: changing outDir must hot-update all existing tasks.
+
+        Without propagation, tasks created before the change keep writing
+        to the old directory.
+        """
+        # Add a task so there's something to propagate to
+        task_manager = app.state.task_manager
+        mock_task = MagicMock()
+        mock_task.update_out_dir = MagicMock()
+        task_manager._tasks[12345] = mock_task
+
+        resp = await client.patch(
+            "/api/v1/settings",
+            json={"output": {"out_dir": "/new/recordings"}},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["code"] == 0
+
+        # The task's update_out_dir must have been called with the new path
+        mock_task.update_out_dir.assert_called_once_with("/new/recordings")
+
+    async def test_patch_out_dir_propagates_to_multiple_tasks(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        """All existing tasks must receive the new out_dir, not just the first."""
+        task_manager = app.state.task_manager
+        mock_tasks = [MagicMock() for _ in range(3)]
+        for i, t in enumerate(mock_tasks):
+            t.update_out_dir = MagicMock()
+            task_manager._tasks[i + 1] = t
+
+        await client.patch(
+            "/api/v1/settings",
+            json={"output": {"out_dir": "/another/path"}},
+        )
+
+        for t in mock_tasks:
+            t.update_out_dir.assert_called_once_with("/another/path")
+
 
 class TestTaskSettings:
     async def test_get_task_settings_not_found(self, client: AsyncClient) -> None:

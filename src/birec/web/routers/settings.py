@@ -57,6 +57,15 @@ async def patch_settings(request: Request) -> dict[str, Any]:
     # Persist to disk
     manager.dump()
 
+    # Hot-update output directory on existing tasks so that future recordings
+    # land in the new location immediately (fixes #6).
+    output_patch = settings_in.model_dump(exclude_none=True).get("output")
+    if output_patch and "out_dir" in output_patch:
+        new_out_dir: str = current.output.out_dir
+        task_manager = request.app.state.task_manager
+        for task in task_manager.get_all_tasks():
+            task.update_out_dir(new_out_dir)
+
     data = manager.get_settings().model_dump(
         mode="json", exclude_none=True, by_alias=True
     )

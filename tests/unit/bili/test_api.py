@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
@@ -60,6 +60,24 @@ class TestAppApiSigning:
         )
         assert params["appkey"] == AppApi._tv_appkey
         assert "sign" in params
+
+    def test_tv_appsec_length_32(self) -> None:
+        """_tv_appsec must be a full 32-char hex MD5 secret.
+
+        Regression: a truncated secret produces valid-looking but wrong
+        signatures, causing silent 403 rejections from passport.
+        """
+        assert len(AppApi._tv_appsec) == 32
+        # Also verify it's valid hex
+        int(AppApi._tv_appsec, 16)
+
+    def test_tv_signed_produces_valid_md5_sign(self) -> None:
+        """Verify the TV sign is a proper 32-char MD5 hex digest."""
+        params = AppApi._signed_with(
+            AppApi._tv_appkey, AppApi._tv_appsec, {"local_id": "0", "ts": 0}
+        )
+        assert len(params["sign"]) == 32
+        int(params["sign"], 16)  # must be valid hex
 
 
 class TestBaseApiFailover:
@@ -217,18 +235,30 @@ class TestAppApiEndpoints:
         assert len(results) == 1
         assert "stream" in results[0]
 
-    async def test_request_tv_qrcode(self, session: aiohttp.ClientSession) -> None:
+    async def test_request_tv_qrcode_posts(
+        self, session: aiohttp.ClientSession
+    ) -> None:
+        """auth_code 端点必须以 POST 表单请求；用 GET 会被 passport 网关 405 拒绝。"""
         api = AppApi(session)
-
-        async def mock_get_json(base_urls: list[str], path: str, **kw: Any) -> dict:
-            return {
+        mock_resp = AsyncMock()
+        mock_resp.json = AsyncMock(
+            return_value={
                 "code": 0,
                 "data": {"url": "https://qr.example.com", "auth_code": "abc"},
             }
+        )
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
 
-        with patch.object(api, "_get_json", side_effect=mock_get_json):
+        mock_post = MagicMock(return_value=mock_resp)
+        with patch.object(session, "post", mock_post):
             result = await api.request_tv_qrcode()
         assert result["auth_code"] == "abc"
+        mock_post.assert_called_once()
+        # 签名参数以表单编码发送，而非拼在 query string。
+        posted_data = mock_post.call_args.kwargs["data"]
+        assert posted_data["appkey"] == AppApi._tv_appkey
+        assert "sign" in posted_data
 
     async def test_poll_tv_qrcode_posts(self, session: aiohttp.ClientSession) -> None:
         api = AppApi(session)
@@ -236,8 +266,6 @@ class TestAppApiEndpoints:
         mock_resp.json = AsyncMock(return_value={"code": 0, "data": {"cookies": []}})
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
-
-        from unittest.mock import MagicMock
 
         mock_post = MagicMock(return_value=mock_resp)
         with patch.object(session, "post", mock_post):

@@ -141,6 +141,33 @@ class TestRecorder:
         assert recorder.is_recording is True
 
     @pytest.mark.asyncio
+    async def test_on_live_began_creates_download_task(self, recorder):
+        """Regression: start must create a _download_task (FLV download loop).
+
+        Without this, is_recording can be True but no data actually flows.
+        """
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)  # Let _start_recording_async complete
+        # The FLV impl must be instantiated
+        assert recorder._flv_impl is not None
+        assert recorder._flv_impl.running is True
+        # A download asyncio.Task must be scheduled
+        assert recorder._download_task is not None
+        assert not recorder._download_task.done()
+        await recorder.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_download_task(self, recorder):
+        """stop() must cancel the download loop and await its cleanup."""
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder._download_task is not None
+        await recorder.stop()
+        # After stop, download task and impl must be cleaned
+        assert recorder._download_task is None
+        assert recorder._flv_impl is None
+
+    @pytest.mark.asyncio
     async def test_on_live_began_refreshes_info(self, recorder, tmp_path):
         """Paths are rendered at recording start, so info must land first."""
         recorder._path_provider._path_template = "{roomid} - {uname}/rec"

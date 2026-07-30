@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from datetime import datetime
@@ -12,6 +13,34 @@ from tqdm import tqdm
 from birec.logging.typing import LOG_LEVEL
 
 __all__ = ("configure_logger", "TqdmOutputStream", "make_log_file_path")
+
+
+class _InterceptHandler(logging.Handler):
+    """Bridge stdlib logging to loguru.
+
+    Any module using ``logging.getLogger(__name__)`` will have its records
+    forwarded to the loguru sinks configured here, so that *all* application
+    logs land in the same destinations with consistent formatting.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        # Map stdlib level name → loguru level.
+        try:
+            level: str | int = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        # Walk the call stack to find the real caller (skip logging internals).
+        frame = sys._getframe(6)
+        depth = 6
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back  # type: ignore[assignment]
+            depth += 1
+
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
+
 
 LOGURU_CONSOLE_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
@@ -59,6 +88,10 @@ def configure_logger(
     global _old_log_dir, _old_console_log_level, _old_backup_count
 
     logger.configure(extra={"room_id": ""})
+
+    # Bridge stdlib logging → loguru (idempotent: basicConfig with force=True
+    # replaces any previous root handlers).
+    logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
 
     if console_log_level != _old_console_log_level:
         if _console_handler_id is not None:

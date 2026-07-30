@@ -87,6 +87,9 @@ class StreamRecorder:
         self._real_stream_format: StreamFormat | None = None
         self._real_quality_number: QualityNumber | None = None
         self._stream_available_time: datetime | None = None
+        # Stream URL tracking (populated by the download loop once resolved)
+        self._current_stream_url: str = ""
+        self._current_stream_host: str = ""
 
     @property
     def is_recording(self) -> bool:
@@ -99,6 +102,16 @@ class StreamRecorder:
     @property
     def current_video_path(self) -> str:
         return self._current_video_path
+
+    @property
+    def current_stream_url(self) -> str:
+        """The resolved stream URL currently being downloaded, or \"\"."""
+        return self._current_stream_url
+
+    @property
+    def current_stream_host(self) -> str:
+        """The CDN hostname of the current stream URL, or \"\"."""
+        return self._current_stream_host
 
     @property
     def current_danmaku_path(self) -> str:

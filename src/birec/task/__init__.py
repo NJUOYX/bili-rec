@@ -285,6 +285,10 @@ class RecordTask:
         self._monitor.remove_listener(self._recorder)
         logger.debug("Recorder disabled for room %d", self._room_id)
 
+    def update_out_dir(self, out_dir: str) -> None:
+        """Propagate an output directory change to the underlying recorder."""
+        self._recorder.update_out_dir(out_dir)
+
     # ── data ─────────────────────────────────────────────────────────────
 
     def get_data(self) -> TaskData:
@@ -292,10 +296,20 @@ class RecordTask:
         room_info = self._live.room_info
         user_info = self._live.user_info
         stream_recorder = self._recorder.stream_recorder
+        stats = stream_recorder.statistics
         status = TaskStatus(
             monitor_enabled=self._monitor_enabled,
             recorder_enabled=self._recorder_enabled,
             running_status=self.running_status,
+            stream_url=stream_recorder.current_stream_url,
+            stream_host=stream_recorder.current_stream_host,
+            dl_total=stats.dl_total,
+            dl_rate=stats.dl_rate,
+            rec_elapsed=stats.rec_elapsed,
+            rec_total=int(stats.rec_total),
+            rec_rate=stats.rec_rate,
+            danmu_total=stats.danmu_total,
+            danmu_rate=stats.danmu_rate,
             recording_path=stream_recorder.current_video_path,
             real_stream_format=stream_recorder.real_stream_format or "",
             real_quality_number=stream_recorder.real_quality_number or 0,
