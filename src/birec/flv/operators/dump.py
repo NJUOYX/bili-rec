@@ -15,9 +15,14 @@ from ..format import FlvDumper
 from ..models import FlvHeader, FlvTag
 from .typing import FLVStream, FLVStreamItem
 
-__all__ = ("dump", "Dumper")
+__all__ = ("dump", "Dumper", "FLUSH_THRESHOLD")
 
 logger = logging.getLogger(__name__)
+
+# Flush once this many bytes have accumulated. Python's default buffering would
+# otherwise leave the file on disk stuck at its old size for long stretches of a
+# live recording, which both hides progress and loses the tail on a hard kill.
+FLUSH_THRESHOLD = 256 * 1024
 
 
 class Dumper:
@@ -28,12 +33,14 @@ class Dumper:
         self._file: IO[bytes] | None = None
         self._dumper: FlvDumper | None = None
         self._bytes_written = 0
+        self._unflushed = 0
 
     def open(self) -> None:
         """Open the file for writing."""
         self._file = open(self._path, "wb")  # noqa: SIM115
         self._dumper = FlvDumper(self._file)
         self._bytes_written = 0
+        self._unflushed = 0
         logger.debug("Opened %s for writing", self._path)
 
     def close(self) -> None:
@@ -42,7 +49,14 @@ class Dumper:
             self._file.close()
             self._file = None
             self._dumper = None
+            self._unflushed = 0
             logger.debug("Closed %s (%d bytes)", self._path, self._bytes_written)
+
+    def flush(self) -> None:
+        """Push buffered bytes out to the filesystem."""
+        if self._file is not None:
+            self._file.flush()
+            self._unflushed = 0
 
     def write(self, item: FLVStreamItem) -> int:
         """Write an item to the file."""
@@ -52,14 +66,19 @@ class Dumper:
         if isinstance(item, FlvHeader):
             self._dumper.dump_header(item)
             self._dumper.dump_previous_tag_size(0)
-            self._bytes_written += item.size + 4
-            return item.size + 4
+            written = item.size + 4
         elif isinstance(item, FlvTag):
             self._dumper.dump_tag(item)
             self._dumper.dump_previous_tag_size(item.tag_size)
-            self._bytes_written += item.tag_size + 4
-            return item.tag_size + 4
-        return 0
+            written = item.tag_size + 4
+        else:
+            return 0
+
+        self._bytes_written += written
+        self._unflushed += written
+        if self._unflushed >= FLUSH_THRESHOLD:
+            self.flush()
+        return written
 
     @property
     def bytes_written(self) -> int:
