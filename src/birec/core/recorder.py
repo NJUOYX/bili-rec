@@ -171,6 +171,11 @@ class Recorder(LiveMonitorListener):
 
     async def _stop_recording_async(self) -> None:
         """Internal async stop: stop download loop then finalize segment."""
+        # A start still in flight would spawn the download loop right after we
+        # tore it down, so let it settle before cancelling anything.
+        if self._start_task is not None and not self._start_task.done():
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._start_task
         if self._flv_impl is not None:
             self._flv_impl.stop()
         if self._download_task is not None and not self._download_task.done():
@@ -206,10 +211,12 @@ class Recorder(LiveMonitorListener):
         logger.debug("Room %d: room changed", self._room_id)
         self.update_info(live.room_info, live.user_info)
 
-    async def stop(self) -> None:
-        """Stop recording and clean up.
+    async def stop_recording(self) -> None:
+        """Finalize the current recording but stay subscribed to the monitor.
 
-        Awaits the stop task to ensure files are finalized before returning.
+        Used when recording is switched off by the user: no live-end event will
+        arrive to close the segment, so it has to be finalized explicitly, while
+        the recorder itself must remain reusable if recording is switched back on.
         """
         if self._is_recording:
             self._is_recording = False
@@ -217,4 +224,11 @@ class Recorder(LiveMonitorListener):
             await self._stop_recording_async()
         elif self._stop_task is not None and not self._stop_task.done():
             await self._stop_task
+
+    async def stop(self) -> None:
+        """Stop recording, clean up, and detach from the monitor.
+
+        Awaits the stop task to ensure files are finalized before returning.
+        """
+        await self.stop_recording()
         self._monitor.remove_listener(self)

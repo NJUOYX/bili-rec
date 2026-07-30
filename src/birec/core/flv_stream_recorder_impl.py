@@ -170,5 +170,8 @@ class FLVStreamRecorderImpl:
             while self._running:
                 await asyncio.sleep(_STATS_TICK_INTERVAL)
                 self._stream_recorder.statistics.tick()
+                # Bytes downloaded and bytes written diverge (buffering, dropped
+                # tags), so report the on-disk size rather than inferring it.
+                self._stream_recorder.update_file_size()
         except asyncio.CancelledError:
             pass

@@ -261,6 +261,9 @@ class RecordTask:
         self._monitor_enabled = False
         self._monitor.disable()
         await self._danmaku_client.stop()
+        # Without the monitor no live-end event will ever arrive, so a recording
+        # in progress would keep running and report "recording" forever.
+        await self._recorder.stop_recording()
         logger.debug("Monitor disabled for room %d", self._room_id)
 
     async def _start_monitoring(self) -> None:
@@ -277,12 +280,15 @@ class RecordTask:
         self._monitor.add_listener(self._recorder)
         logger.debug("Recorder enabled for room %d", self._room_id)
 
-    def disable_recorder(self) -> None:
-        """Disable recording by removing the recorder from the monitor."""
+    async def disable_recorder(self) -> None:
+        """Disable recording and finalize any segment still in progress."""
         if not self._recorder_enabled:
             return
         self._recorder_enabled = False
         self._monitor.remove_listener(self._recorder)
+        # Dropping the listener only blocks future live-start events; the
+        # current segment has to be closed out explicitly.
+        await self._recorder.stop_recording()
         logger.debug("Recorder disabled for room %d", self._room_id)
 
     def update_out_dir(self, out_dir: str) -> None:
@@ -533,9 +539,9 @@ class RecordTaskManager:
         """Enable recording for a task."""
         self._get_or_raise(room_id).enable_recorder()
 
-    def disable_recorder(self, room_id: int) -> None:
+    async def disable_recorder(self, room_id: int) -> None:
         """Disable recording for a task."""
-        self._get_or_raise(room_id).disable_recorder()
+        await self._get_or_raise(room_id).disable_recorder()
 
     def get_task_data(self, room_id: int) -> TaskData:
         """Get the task data snapshot for a room."""

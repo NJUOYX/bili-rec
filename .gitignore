@@ -32,6 +32,8 @@ htmlcov/
 # Project runtime
 *.log
 /config.toml
+/recordings/
+/logs/
 
 # Reference-only symlink to blrec (read-only, not part of this repo)
 /blrec

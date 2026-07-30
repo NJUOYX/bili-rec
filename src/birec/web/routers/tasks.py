@@ -213,10 +213,10 @@ async def batch_disable_recorder(
         for rid in body.room_ids:
             task = manager.get_task(rid)
             if task:
-                task.disable_recorder()
+                await task.disable_recorder()
     else:
         for task in manager.get_all_tasks():
-            task.disable_recorder()
+            await task.disable_recorder()
     return _ok(message="Recorder disabled")
 
 
@@ -359,7 +359,7 @@ async def disable_recorder(request: Request, room_id: int) -> dict[str, Any]:
     """Disable recorder for a task."""
     manager = _get_manager(request)
     try:
-        manager.disable_recorder(room_id)
+        await manager.disable_recorder(room_id)
     except KeyError:
         return ResponseMessage(code=404, message=f"Task {room_id} not found").to_dict()
     return _ok(message="Recorder disabled")

@@ -53,6 +53,7 @@ def _make_components() -> dict[str, MagicMock]:
     recorder = MagicMock()
     recorder.is_recording = False
     recorder.stop = AsyncMock()
+    recorder.stop_recording = AsyncMock()
     recorder.stream_recorder.current_video_path = ""
     recorder.stream_recorder.current_danmaku_path = ""
     recorder.stream_recorder.current_raw_danmaku_path = ""
@@ -234,16 +235,46 @@ class TestRecordTaskControl:
         assert not task.monitor_enabled
         comps["monitor"].disable.assert_called_once()
         comps["danmaku_client"].stop.assert_awaited_once()
+        # No monitor means no live-end event, so the segment must be closed here.
+        comps["recorder"].stop_recording.assert_awaited_once()
 
-    def test_enable_disable_recorder(self) -> None:
+    async def test_enable_disable_recorder(self) -> None:
         task, comps = _make_task(enable_recorder=False)
         task.enable_recorder()
         assert task.recorder_enabled
         comps["monitor"].add_listener.assert_called_once_with(comps["recorder"])
 
-        task.disable_recorder()
+        await task.disable_recorder()
         assert not task.recorder_enabled
         comps["monitor"].remove_listener.assert_called_once_with(comps["recorder"])
+
+    async def test_disable_recorder_stops_recording_in_progress(self) -> None:
+        """Regression: turning recording off must finalize the current segment.
+
+        Dropping the monitor listener alone leaves the download loop running and
+        ``running_status`` stuck at "recording".
+        """
+        task, comps = _make_task(enable_recorder=True)
+        comps["recorder"].is_recording = True
+        assert task.running_status == RunningStatus.RECORDING
+
+        await task.disable_recorder()
+
+        comps["recorder"].stop_recording.assert_awaited_once()
+
+    async def test_disable_monitor_reports_stopped_afterwards(self) -> None:
+        """Regression: after stopping a task the status must leave "recording"."""
+        task, comps = _make_task(enable_monitor=True)
+        comps["recorder"].is_recording = True
+
+        async def _stop_recording() -> None:
+            comps["recorder"].is_recording = False
+
+        comps["recorder"].stop_recording = AsyncMock(side_effect=_stop_recording)
+
+        await task.disable_monitor()
+
+        assert task.running_status == RunningStatus.STOPPED
 
 
 class TestRecordTaskData:
