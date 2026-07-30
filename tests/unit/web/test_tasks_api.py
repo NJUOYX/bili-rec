@@ -88,7 +88,7 @@ def _make_mock_task(
     task.enable_monitor = AsyncMock()
     task.disable_monitor = AsyncMock()
     task.enable_recorder = MagicMock()
-    task.disable_recorder = MagicMock()
+    task.disable_recorder = AsyncMock()
     task.refresh_info = AsyncMock()
     task.setup = AsyncMock()
     task.destroy = AsyncMock()
@@ -416,7 +416,7 @@ class TestDisableRecorder:
         resp = client.post("/api/v1/tasks/1001/recorder/disable")
         body = resp.json()
         assert body["code"] == 0
-        task_manager._tasks[1001].disable_recorder.assert_called_once()
+        task_manager._tasks[1001].disable_recorder.assert_awaited_once()
 
     def test_disable_not_found(self, client: TestClient) -> None:
         resp = client.post("/api/v1/tasks/9999/recorder/disable")
@@ -522,8 +522,8 @@ class TestBatchDisableRecorder:
         resp = client.post("/api/v1/tasks/recorder/disable", json={})
         body = resp.json()
         assert body["code"] == 0
-        task_manager._tasks[1001].disable_recorder.assert_called_once()
-        task_manager._tasks[1002].disable_recorder.assert_called_once()
+        task_manager._tasks[1001].disable_recorder.assert_awaited_once()
+        task_manager._tasks[1002].disable_recorder.assert_awaited_once()
 
 
 # ── DELETE /tasks/{room_id} ───────────────────────────────────────────────────

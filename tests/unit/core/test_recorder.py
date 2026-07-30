@@ -213,6 +213,38 @@ class TestRecorder:
         await recorder.stop()
         assert recorder.is_recording is False
 
+    @pytest.mark.asyncio
+    async def test_stop_recording_keeps_monitor_subscription(self, recorder):
+        """Regression: switching recording off must not unsubscribe the recorder.
+
+        ``stop()`` detaches from the monitor, which would make a later
+        re-enable silently never record again.
+        """
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+
+        await recorder.stop_recording()
+
+        assert recorder.is_recording is False
+        assert recorder._download_task is None
+        assert recorder._flv_impl is None
+        recorder._monitor.remove_listener.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_settles_an_in_flight_start(self, recorder):
+        """Stopping right after a live-start must not leave the loop running.
+
+        ``on_live_began`` only schedules the start, so a stop arriving before it
+        finishes used to tear down nothing and the download loop kept writing.
+        """
+        recorder.on_live_began(recorder._live)
+        # Deliberately no sleep: _start_task has not run yet.
+        await recorder.stop_recording()
+
+        assert recorder.is_recording is False
+        assert recorder._download_task is None
+        assert recorder._flv_impl is None
+
     def test_with_danmaku(self, tmp_path):
         live = _make_live()
         monitor = MagicMock(spec=LiveMonitor)
