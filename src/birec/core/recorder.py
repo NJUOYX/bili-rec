@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 import aiohttp
@@ -12,6 +13,7 @@ from ..bili.live_monitor import LiveMonitor, LiveMonitorListener
 from ..bili.models import RoomInfo, UserInfo
 from .cover_downloader import CoverDownloader
 from .danmaku_receiver import DanmakuReceiver
+from .flv_stream_recorder_impl import FLVStreamRecorderImpl
 from .metadata_provider import MetadataProvider
 from .path_provider import PathProvider
 from .raw_danmaku_receiver import RawDanmakuReceiver
@@ -58,6 +60,8 @@ class Recorder(LiveMonitorListener):
         self._is_recording: bool = False
         self._start_task: asyncio.Task[None] | None = None
         self._stop_task: asyncio.Task[None] | None = None
+        self._download_task: asyncio.Task[None] | None = None
+        self._flv_impl: FLVStreamRecorderImpl | None = None
 
         # Set up danmaku if provided
         if danmaku_receiver:
@@ -117,8 +121,17 @@ class Recorder(LiveMonitorListener):
         self._start_task.add_done_callback(self._on_start_done)
 
     async def _start_recording_async(self) -> None:
-        """Internal async start."""
+        """Internal async start: initialize segment then start download loop."""
         await self._stream_recorder.start_recording()
+        # Launch FLV download loop as a background task.
+        self._flv_impl = FLVStreamRecorderImpl(
+            self._stream_recorder,
+            self._live,
+            self._session,
+            self._stream_recorder.stream_params,
+        )
+        self._download_task = asyncio.create_task(self._flv_impl.run())
+        self._download_task.add_done_callback(self._on_download_done)
 
     def _on_start_done(self, task: asyncio.Task[None]) -> None:
         """Handle start task completion."""
@@ -134,6 +147,18 @@ class Recorder(LiveMonitorListener):
             self._is_recording = False
             self._statistics.stop()
 
+    def _on_download_done(self, task: asyncio.Task[None]) -> None:
+        """Handle download task completion (stream ended or error)."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Room %d: download loop crashed: %s",
+                self._room_id,
+                exc,
+            )
+
     def on_live_ended(self, live: Live) -> None:
         """Called when LiveMonitor detects live end."""
         if not self._is_recording:
@@ -145,7 +170,15 @@ class Recorder(LiveMonitorListener):
         self._stop_task.add_done_callback(self._on_stop_done)
 
     async def _stop_recording_async(self) -> None:
-        """Internal async stop."""
+        """Internal async stop: stop download loop then finalize segment."""
+        if self._flv_impl is not None:
+            self._flv_impl.stop()
+        if self._download_task is not None and not self._download_task.done():
+            self._download_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._download_task
+        self._flv_impl = None
+        self._download_task = None
         await self._stream_recorder.stop_recording()
 
     def _on_stop_done(self, task: asyncio.Task[None]) -> None:
@@ -181,7 +214,7 @@ class Recorder(LiveMonitorListener):
         if self._is_recording:
             self._is_recording = False
             self._statistics.stop()
-            await self._stream_recorder.stop_recording()
+            await self._stop_recording_async()
         elif self._stop_task is not None and not self._stop_task.done():
             await self._stop_task
         self._monitor.remove_listener(self)
