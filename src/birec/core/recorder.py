@@ -98,6 +98,10 @@ class Recorder(LiveMonitorListener):
         self._path_provider.update_info(room_info, user_info)
         self._metadata_provider.update(room_info, user_info)
 
+    def update_out_dir(self, out_dir: str) -> None:
+        """Hot-update the output directory for future recordings."""
+        self._path_provider.out_dir = out_dir
+
     def on_live_began(self, live: Live) -> None:
         """Called when LiveMonitor detects live start."""
         if self._is_recording:

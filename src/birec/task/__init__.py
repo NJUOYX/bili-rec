@@ -285,6 +285,10 @@ class RecordTask:
         self._monitor.remove_listener(self._recorder)
         logger.debug("Recorder disabled for room %d", self._room_id)
 
+    def update_out_dir(self, out_dir: str) -> None:
+        """Propagate an output directory change to the underlying recorder."""
+        self._recorder.update_out_dir(out_dir)
+
     # ── data ─────────────────────────────────────────────────────────────
 
     def get_data(self) -> TaskData:
