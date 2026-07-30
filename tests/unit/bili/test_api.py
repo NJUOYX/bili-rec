@@ -61,6 +61,24 @@ class TestAppApiSigning:
         assert params["appkey"] == AppApi._tv_appkey
         assert "sign" in params
 
+    def test_tv_appsec_length_32(self) -> None:
+        """_tv_appsec must be a full 32-char hex MD5 secret.
+
+        Regression: a truncated secret produces valid-looking but wrong
+        signatures, causing silent 403 rejections from passport.
+        """
+        assert len(AppApi._tv_appsec) == 32
+        # Also verify it's valid hex
+        int(AppApi._tv_appsec, 16)
+
+    def test_tv_signed_produces_valid_md5_sign(self) -> None:
+        """Verify the TV sign is a proper 32-char MD5 hex digest."""
+        params = AppApi._signed_with(
+            AppApi._tv_appkey, AppApi._tv_appsec, {"local_id": "0", "ts": 0}
+        )
+        assert len(params["sign"]) == 32
+        int(params["sign"], 16)  # must be valid hex
+
 
 class TestBaseApiFailover:
     async def test_sequential_failover_first_fails(

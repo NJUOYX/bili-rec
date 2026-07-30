@@ -26,6 +26,44 @@ def test_configure_logger_writes_to_file(tmp_path) -> None:
     assert "hello-birec" in content
 
 
+def test_stdlib_logging_bridged_to_loguru(tmp_path) -> None:
+    """Regression: modules using stdlib logging.getLogger must be captured.
+
+    Without the InterceptHandler bridge, any module that calls
+    logging.getLogger(__name__).info(...) would produce no output at all.
+    """
+    import logging as stdlib_logging
+
+    configure_logger(str(tmp_path), console_log_level="DEBUG", backup_count=3)
+
+    # Simulate a module using stdlib logging (like birec.core.recorder)
+    test_logger = stdlib_logging.getLogger("birec.test_bridge_module")
+    test_logger.info("stdlib-bridge-test-marker")
+    logger.complete()
+
+    logs = list(tmp_path.glob("birec_*.log"))
+    assert logs
+    content = logs[0].read_text()
+    assert "stdlib-bridge-test-marker" in content
+
+
+def test_stdlib_logging_bridge_captures_warning_level(tmp_path) -> None:
+    """Verify WARNING level from stdlib also arrives in loguru sink."""
+    import logging as stdlib_logging
+
+    configure_logger(str(tmp_path), console_log_level="DEBUG", backup_count=3)
+
+    test_logger = stdlib_logging.getLogger("birec.test_bridge_warn")
+    test_logger.warning("bridge-warn-marker")
+    logger.complete()
+
+    logs = list(tmp_path.glob("birec_*.log"))
+    assert logs
+    content = logs[0].read_text()
+    assert "bridge-warn-marker" in content
+    assert "WARNING" in content
+
+
 def test_tqdm_output_stream_write_and_isatty() -> None:
     stream = TqdmOutputStream()
     stream.write("noop")

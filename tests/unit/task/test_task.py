@@ -289,6 +289,40 @@ class TestRecordTaskData:
         assert data.task_status.real_stream_format == "flv"
         assert data.task_status.real_quality_number == 10000
 
+    def test_get_data_statistics_fields_populated(self) -> None:
+        """Regression: all statistics fields must come from stream_recorder.statistics.
+
+        Previously get_data() left dl_total, dl_rate, etc. at default 0,
+        even while recording was active with real data.
+        """
+        task, comps = _make_task()
+        # Set up realistic statistics mock values
+        stats = comps["recorder"].stream_recorder.statistics
+        stats.dl_total = 1024000
+        stats.dl_rate = 512.5
+        stats.rec_elapsed = 60.0
+        stats.rec_total = 120.0
+        stats.rec_rate = 8533.3
+        stats.danmu_total = 42
+        stats.danmu_rate = 0.7
+        comps["recorder"].stream_recorder.current_stream_url = (
+            "https://cdn.example.com/live.flv"
+        )
+        comps["recorder"].stream_recorder.current_stream_host = "cdn.example.com"
+
+        data = task.get_data()
+        status = data.task_status
+        # Each statistics field must reflect the mocked values
+        assert status.dl_total == 1024000
+        assert status.dl_rate == 512.5
+        assert status.rec_elapsed == 60.0
+        assert status.rec_total == 120
+        assert status.rec_rate == 8533.3
+        assert status.danmu_total == 42
+        assert status.danmu_rate == 0.7
+        assert status.stream_url == "https://cdn.example.com/live.flv"
+        assert status.stream_host == "cdn.example.com"
+
 
 class TestRecordTaskManager:
     def _factory(self, tasks: dict[int, RecordTask]) -> MagicMock:
