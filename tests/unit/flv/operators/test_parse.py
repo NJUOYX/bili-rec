@@ -5,11 +5,14 @@ from __future__ import annotations
 from io import BytesIO
 
 import reactivex
+from reactivex.subject import Subject
 from reactivex.testing import TestScheduler
 
-from birec.flv import FlvHeader, FlvTag
+from birec.flv import FlvHeader, FlvTag, StreamBuffer
+from birec.flv.common import is_avc_end_sequence_tag
 from birec.flv.operators import parse
 from birec.flv.operators.typing import FLVStreamItem
+from birec.flv.struct_io import RandomIO
 
 from ..conftest import make_audio_tag, make_flv_bytes, make_video_tag
 
@@ -142,3 +145,79 @@ class TestParse:
         # Should not complete since complete_on_eof=False
         # But source completes, so it will complete
         assert len(completed) == 1
+
+
+class TestParseResumable:
+    """Tests for parse(resumable=True), used by live FLV downloads."""
+
+    def test_chunked_feed_yields_every_tag(self) -> None:
+        """Regression: chunk boundaries must not drop tags or end the stream.
+
+        A live download hands over arbitrary HTTP chunks that cut tags in half.
+        Without resumable parsing the first chunk is parsed as a whole FLV
+        document and everything after it is silently discarded.
+        """
+        tags = [make_video_tag(timestamp=i * 40, body=bytes([i]) * 8) for i in range(6)]
+        data = make_flv_bytes(tags=tags)
+        buffer = StreamBuffer()
+        source: Subject[RandomIO] = Subject()
+
+        results: list[FLVStreamItem] = []
+        completed: list[bool] = []
+        source.pipe(parse(resumable=True)).subscribe(
+            on_next=results.append,
+            on_completed=lambda: completed.append(True),
+        )
+
+        # 5 bytes splits the 9-byte header, the 11-byte tag headers and bodies.
+        for i in range(0, len(data), 5):
+            buffer.append(data[i : i + 5])
+            source.on_next(buffer)
+            buffer.discard_consumed()
+            assert not completed, "a partial chunk must not end the stream"
+
+        header = results[0]
+        assert isinstance(header, FlvHeader)
+        parsed_tags = [item for item in results if isinstance(item, FlvTag)]
+        assert [t.timestamp for t in parsed_tags] == [i * 40 for i in range(6)]
+        assert [t.body for t in parsed_tags] == [bytes([i]) * 8 for i in range(6)]
+
+    def test_tag_offsets_are_absolute_across_chunks(self) -> None:
+        """Tag offsets must reflect the whole stream, not the current chunk."""
+        tags = [make_video_tag(timestamp=i * 40) for i in range(4)]
+        data = make_flv_bytes(tags=tags)
+        buffer = StreamBuffer()
+        source: Subject[RandomIO] = Subject()
+
+        results: list[FLVStreamItem] = []
+        source.pipe(parse(resumable=True)).subscribe(on_next=results.append)
+
+        for i in range(0, len(data), 9):
+            buffer.append(data[i : i + 9])
+            source.on_next(buffer)
+            buffer.discard_consumed()
+
+        offsets = [item.offset for item in results if isinstance(item, FlvTag)]
+        assert offsets == sorted(offsets)
+        assert offsets[0] == 13  # 9-byte header + 4-byte back-pointer
+
+    def test_end_sequence_tag_emitted_once_on_completion(self) -> None:
+        """The AVC end sequence tag belongs at the end, not at every boundary."""
+        data = make_flv_bytes(tags=[make_video_tag()])
+        buffer = StreamBuffer()
+        source: Subject[RandomIO] = Subject()
+
+        results: list[FLVStreamItem] = []
+        source.pipe(parse(resumable=True)).subscribe(on_next=results.append)
+
+        for i in range(0, len(data), 4):
+            buffer.append(data[i : i + 4])
+            source.on_next(buffer)
+            buffer.discard_consumed()
+
+        before_completion = len(results)
+        source.on_completed()
+
+        end_tags = [item for item in results if is_avc_end_sequence_tag(item)]
+        assert len(end_tags) == 1
+        assert len(results) == before_completion + 1

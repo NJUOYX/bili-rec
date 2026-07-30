@@ -33,6 +33,7 @@ from .models import (
     VideoTag,
     VideoTagHeader,
 )
+from .stream_buffer import StreamBuffer
 from .struct_io import RandomIO, StructReader, StructWriter
 from .utils import AutoRollbacker, OffsetRepositor, format_timestamp
 
@@ -79,6 +80,7 @@ __all__ = (
     "VideoTagHeader",
     # StructIO
     "RandomIO",
+    "StreamBuffer",
     "StructReader",
     "StructWriter",
     # Utils
