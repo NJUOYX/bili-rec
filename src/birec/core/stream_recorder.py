@@ -6,7 +6,6 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
@@ -17,8 +16,9 @@ from reactivex.subject import Subject
 
 from ..bili.live import Live
 from ..bili.typing import QualityNumber, StreamFormat
-from ..flv.operators import Dumper, ProgressBar, dump, parse, process, progress
+from ..flv.operators import ProgressBar, dump, parse, process, progress
 from ..flv.operators.typing import FLVStream, FLVStreamItem
+from ..flv.stream_buffer import StreamBuffer
 from ..flv.struct_io import RandomIO
 from ..hls.models import HlsPlaylist, HlsSegment
 from ..hls.operators.analyse import HlsAnalyser
@@ -70,11 +70,11 @@ class StreamRecorder:
         self._raw_danmaku_dumper: RawDanmakuDumper | None = None
         self._cover_downloader: CoverDownloader | None = None
         # FLV pipeline state
-        self._flv_dumper: Dumper | None = None
         self._flv_progress: ProgressBar | None = None
         self._flv_subscription: DisposableBase | None = None
         self._flv_disposables: CompositeDisposable | None = None
         self._flv_source: Subject[RandomIO] | None = None
+        self._flv_buffer: StreamBuffer | None = None
         # HLS pipeline state
         self._hls_segment_dumper: SegmentDumper | None = None
         self._hls_playlist_dumper: PlaylistDumper | None = None
@@ -324,15 +324,16 @@ class StreamRecorder:
         Returns:
             The processed FLVStream ready for subscription.
         """
-        self._flv_dumper = Dumper(output_path)
         self._flv_progress = ProgressBar()
 
-        # Build a source subject for feeding raw IO data
+        # Build a source subject fed by feed_flv_data. The buffer outlives each
+        # chunk so the parser can resume across chunk boundaries.
         source: Subject[RandomIO] = Subject()
         self._flv_source = source
+        self._flv_buffer = StreamBuffer()
 
         # Build pipeline: parse → process → progress → dump
-        parsed = parse()(source)
+        parsed = parse(resumable=True)(source)
         processed = process(sort_tags=sort_tags)(parsed)
 
         # Add progress tracking
@@ -364,19 +365,32 @@ class StreamRecorder:
     def feed_flv_data(self, data: bytes) -> None:
         """Feed raw FLV bytes into the pipeline.
 
-        Wraps data in BytesIO and pushes to the parse stage.
+        Appends to the growing parse buffer and re-drives the pipeline. A single
+        HTTP chunk is not a self-contained FLV document — it routinely ends
+        mid-tag — so the bytes have to accumulate in one buffer the parser can
+        resume from, otherwise everything after the first chunk is lost.
         """
-        if self._flv_source is not None:
-            stream = BytesIO(data)
-            self._flv_source.on_next(stream)
+        if self._flv_source is None or self._flv_buffer is None:
+            return
+        self._flv_buffer.append(data)
+        self._flv_source.on_next(self._flv_buffer)
+        # The chain is synchronous, so by now the parser has advanced to the
+        # last complete tag; everything before it is safe to release.
+        self._flv_buffer.discard_consumed()
 
     def complete_flv_pipeline(self) -> None:
         """Signal completion of the FLV data stream."""
         if self._flv_source is not None:
             self._flv_source.on_completed()
+            self._flv_source = None
 
     def _finalize_flv_pipeline(self) -> None:
         """Finalize and clean up the FLV pipeline."""
+        # Complete before disposing: on completion the operators flush their
+        # buffered tags and the dumper closes the file, whereas dispose() alone
+        # would drop whatever the last GOP had queued up.
+        self.complete_flv_pipeline()
+
         if self._flv_disposables is not None:
             self._flv_disposables.dispose()
             self._flv_disposables = None
@@ -385,12 +399,19 @@ class StreamRecorder:
             self._flv_subscription.dispose()
             self._flv_subscription = None
 
-        if self._flv_dumper is not None:
-            self._flv_dumper.close()
-            self._flv_dumper = None
-
         self._flv_progress = None
+        self._flv_buffer = None
         self._flv_source = None
+
+    def update_file_size(self) -> None:
+        """Refresh the recorded file size from disk for progress reporting."""
+        if not self._current_video_path:
+            return
+        try:
+            size = Path(self._current_video_path).stat().st_size
+        except OSError:
+            return
+        self._statistics.update_file_size(size)
 
     @property
     def flv_progress(self) -> ProgressBar | None:

@@ -16,33 +16,38 @@ from birec.flv import (
     AVCPacketType,
     CodecID,
     FlvHeader,
+    FlvReader,
     FlvWriter,
     FrameType,
     TagType,
     VideoTag,
 )
+from birec.flv.operators.dump import FLUSH_THRESHOLD
 
 
-def _make_flv_bytes() -> bytes:
-    """Build a minimal valid FLV byte blob (header + one keyframe video tag)."""
+def _make_flv_bytes(tag_count: int = 1) -> bytes:
+    """Build a minimal valid FLV byte blob (header + N keyframe video tags)."""
     header = FlvHeader(signature="FLV", version=1, type_flag=0b0000_0101, data_offset=9)
-    tag = VideoTag(
-        offset=0,
-        filtered=False,
-        tag_type=TagType.VIDEO,
-        data_size=15,
-        timestamp=0,
-        stream_id=0,
-        frame_type=FrameType.KEY_FRAME,
-        codec_id=CodecID.AVC,
-        avc_packet_type=AVCPacketType.AVC_NALU,
-        composition_time=0,
-        body=b"\x00" * 10,
-    )
+    tags = [
+        VideoTag(
+            offset=0,
+            filtered=False,
+            tag_type=TagType.VIDEO,
+            data_size=15,
+            timestamp=i * 40,
+            stream_id=0,
+            frame_type=FrameType.KEY_FRAME,
+            codec_id=CodecID.AVC,
+            avc_packet_type=AVCPacketType.AVC_NALU,
+            composition_time=0,
+            body=bytes([i % 256]) * 10,
+        )
+        for i in range(tag_count)
+    ]
     stream = BytesIO()
     writer = FlvWriter(stream)
     writer.write_header(header)
-    writer.write_tags([tag])
+    writer.write_tags(tags)
     return stream.getvalue()
 
 
@@ -171,6 +176,66 @@ class TestStreamRecorderFlvPipeline:
         data = output.read_bytes()
         assert data[:3] == b"FLV"
         assert len(data) > 9  # header plus at least one tag
+        await recorder.stop_recording()
+
+    @pytest.mark.asyncio
+    async def test_flv_chunked_feed_writes_every_tag(
+        self, recorder: StreamRecorder, tmp_path: Path
+    ) -> None:
+        """Regression: a live stream arrives as chunks that cut tags in half.
+
+        Feeding one self-contained blob hides the real failure mode: each chunk
+        used to be parsed as its own FLV document, so the pipeline completed and
+        closed the file after the first chunk and every later tag was dropped.
+        """
+        blob = _make_flv_bytes(tag_count=12)
+        await recorder.start_recording()
+        output = tmp_path / "recorded.flv"
+        recorder.create_flv_pipeline(output, sort_tags=False)
+
+        # 7 bytes is deliberately hostile: it splits the FLV header, the tag
+        # headers and the tag bodies.
+        for i in range(0, len(blob), 7):
+            recorder.feed_flv_data(blob[i : i + 7])
+
+        recorder.complete_flv_pipeline()
+
+        data = output.read_bytes()
+        assert data[:3] == b"FLV"
+        # Every fed tag must be on disk; the trailing AVC end sequence tag is
+        # appended on completion, hence >= rather than ==.
+        assert len(data) >= len(blob)
+        with open(output, "rb") as f:
+            reader = FlvReader(f)
+            reader.read_header()
+            tags = list(reader.read_tags())
+        assert [t.timestamp for t in tags][:12] == [i * 40 for i in range(12)]
+        await recorder.stop_recording()
+
+    @pytest.mark.asyncio
+    async def test_flv_data_reaches_disk_while_recording(
+        self, recorder: StreamRecorder, tmp_path: Path
+    ) -> None:
+        """Regression: the file must grow during recording, not only at close.
+
+        Left to Python's default buffering the recording appears frozen at its
+        initial size, and a hard kill drops everything still in the buffer.
+        """
+        # Each tag is 30 bytes on the wire, so this comfortably crosses the
+        # dumper's flush threshold.
+        tag_count = FLUSH_THRESHOLD // 30 + 100
+        blob = _make_flv_bytes(tag_count=tag_count)
+        await recorder.start_recording()
+        output = tmp_path / "recorded.flv"
+        recorder.create_flv_pipeline(output, sort_tags=False)
+
+        for i in range(0, len(blob), 4096):
+            recorder.feed_flv_data(blob[i : i + 4096])
+
+        # Still recording: nothing has been completed or closed yet.
+        assert output.stat().st_size >= FLUSH_THRESHOLD
+
+        recorder.complete_flv_pipeline()
         await recorder.stop_recording()
 
     @pytest.mark.asyncio
