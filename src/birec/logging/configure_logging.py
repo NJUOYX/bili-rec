@@ -41,6 +41,7 @@ class _InterceptHandler(logging.Handler):
             level, record.getMessage()
         )
 
+
 LOGURU_CONSOLE_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
     "<level>{level}</level> | "

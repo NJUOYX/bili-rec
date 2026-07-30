@@ -305,9 +305,9 @@ class TestRecordTaskData:
         stats.rec_rate = 8533.3
         stats.danmu_total = 42
         stats.danmu_rate = 0.7
-        comps["recorder"].stream_recorder.current_stream_url = (
-            "https://cdn.example.com/live.flv"
-        )
+        comps[
+            "recorder"
+        ].stream_recorder.current_stream_url = "https://cdn.example.com/live.flv"
         comps["recorder"].stream_recorder.current_stream_host = "cdn.example.com"
 
         data = task.get_data()
