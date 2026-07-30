@@ -133,7 +133,7 @@ class AppApi(BaseApi):
     _appsec = "560c52ccd288fed045859ed18bffd973"
 
     _tv_appkey = "4409e2ce8ffd12b8"
-    _tv_appsec = "59b43e04ad6965f7"
+    _tv_appsec = "59b43e04ad6965f34319062b478f83dd"
 
     _app_headers: Final[dict[str, str]] = {
         "User-Agent": (
@@ -268,7 +268,16 @@ class AppApi(BaseApi):
                 "ts": int(datetime.now(UTC).timestamp()),
             },
         )
-        json_res = await self._get_json([url], "", params=params)
+        # TV 端 auth_code 接口要求 POST + 表单编码；若用 GET，passport 网关
+        # 会以 405 拒绝并返回 text/plain 错误页，无法按 JSON 解析。
+        async with self._session.post(
+            url,
+            data=params,
+            headers=self.headers,
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as res:
+            json_res: JsonResponse = await res.json()
+        self._check_response(json_res)
         return json_res["data"]  # type: ignore[no-any-return]
 
     async def poll_tv_qrcode(self, auth_code: str, local_id: str = "0") -> JsonResponse:
