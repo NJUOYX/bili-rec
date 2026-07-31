@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -320,6 +321,32 @@ class TestRecorder:
             "the recorder still claims to be recording after the download gave up"
         )
         assert len(segments) == 1, "the abandoned segment was never handed over"
+
+    @pytest.mark.asyncio
+    async def test_an_unparseable_stream_finalizes_the_recording(self, recorder):
+        """Regression: a dead pipeline must not look like an ongoing recording.
+
+        Reactivex delivers ``on_error`` once and tears the chain down, so after
+        one unparseable byte nothing further is ever written. The error was only
+        logged, so the file stopped growing while the task kept reporting itself
+        as recording and the download kept burning bandwidth — the same silent
+        loss as #9, from a third direction.
+        """
+        segments = []
+        recorder.set_segment_listener(segments.append)
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder.is_recording is True
+
+        recorder.stream_recorder.create_flv_pipeline(
+            Path(recorder.stream_recorder.current_video_path)
+        )
+        recorder.stream_recorder.feed_flv_data(b"FLV\x01\x05\x00\x00\x00\x09")
+        recorder.stream_recorder.feed_flv_data(b"\x00" * 32)
+        await asyncio.sleep(0.05)
+
+        assert recorder.is_recording is False
+        assert len(segments) == 1
 
     @pytest.mark.asyncio
     async def test_segment_started_listener_gets_the_new_segment(self, recorder):

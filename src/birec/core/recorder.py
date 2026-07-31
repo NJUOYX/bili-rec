@@ -80,6 +80,11 @@ class Recorder(LiveMonitorListener):
         if cover_downloader:
             self._stream_recorder.setup_cover_downloader(cover_downloader)
 
+        # A pipeline that dies on unparseable bytes is the only thing that
+        # knows the recording has stopped working, and it cannot close the
+        # segment itself.
+        self._stream_recorder.set_pipeline_failure_listener(self._on_pipeline_failure)
+
         # Register as monitor listener
         monitor.add_listener(self)
 
@@ -208,6 +213,26 @@ class Recorder(LiveMonitorListener):
         logger.warning(
             "Room %d: the download gave up, finalizing the recording",
             self._room_id,
+        )
+        self._is_recording = False
+        self._statistics.stop()
+        self._stop_task = asyncio.create_task(self._stop_recording_async())
+        self._stop_task.add_done_callback(self._on_stop_done)
+
+    def _on_pipeline_failure(self, error: Exception) -> None:
+        """Close the segment when the stream stops being parseable.
+
+        Nothing further will be written once the pipeline has errored, so the
+        alternatives are closing the segment or reporting a recording that is
+        not happening. Closing it keeps what was recorded, hands it to
+        post-processing, and lets the next broadcast start a fresh file.
+        """
+        if not self._is_recording:
+            return
+        logger.warning(
+            "Room %d: the stream became unparseable (%s), finalizing the recording",
+            self._room_id,
+            error,
         )
         self._is_recording = False
         self._statistics.stop()

@@ -84,6 +84,7 @@ class StreamRecorder:
         self._hls_fetcher: SegmentFetcher | None = None
         # Active pipeline tracking ("flv" / "hls" / None)
         self._active_pipeline: Literal["flv", "hls"] | None = None
+        self._pipeline_failure_listener: Callable[[Exception], None] | None = None
         # Real stream tracking (effective format/quality once data flows)
         self._real_stream_format: StreamFormat | None = None
         self._real_quality_number: QualityNumber | None = None
@@ -374,6 +375,14 @@ class StreamRecorder:
 
         def _on_error(error: Exception) -> None:
             logger.error("FLV pipeline error: %s", error)
+            # Reactivex delivers on_error once and tears the chain down with it,
+            # so this subscription is over. Feeding it further bytes writes
+            # nothing at all, and leaving the segment open would have the task
+            # report itself as recording while the file never grows again.
+            self._flv_source = None
+            self._active_pipeline = None
+            if self._pipeline_failure_listener is not None:
+                self._pipeline_failure_listener(error)
 
         subscription = processed.subscribe(
             on_next=_on_next,
@@ -399,6 +408,16 @@ class StreamRecorder:
         # The chain is synchronous, so by now the parser has advanced to the
         # last complete tag; everything before it is safe to release.
         self._flv_buffer.discard_consumed()
+
+    def set_pipeline_failure_listener(
+        self, listener: Callable[[Exception], None] | None
+    ) -> None:
+        """Register the callback fired when the FLV pipeline dies on bad data.
+
+        The pipeline is the only place that learns the stream stopped being
+        parseable, and it cannot close the segment itself.
+        """
+        self._pipeline_failure_listener = listener
 
     def discard_partial_stream(self) -> None:
         """Forget the tail of a connection that ended before its last tag did.
