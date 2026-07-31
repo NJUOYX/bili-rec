@@ -287,6 +287,41 @@ class TestRecorder:
         assert recorder._flv_impl is None
 
     @pytest.mark.asyncio
+    async def test_a_download_that_gives_up_finalizes_the_recording(
+        self, recorder, monkeypatch
+    ):
+        """Regression: a loop out of retries must not leave the task 'recording'.
+
+        The download loop stops after ten failed attempts, and nothing was
+        watching for that. ``_is_recording`` stayed true, so the task went on
+        reporting itself as recording for as long as the room stayed live, with
+        the segment never closed, never post-processed, and not one byte being
+        written. What the user saw and what was happening had nothing to do with
+        each other.
+        """
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._RECONNECT_BASE_DELAY", 0.001
+        )
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._RECONNECT_MAX_DELAY", 0.001
+        )
+        segments = []
+        recorder.set_segment_listener(segments.append)
+
+        # The session is a mock, so every fetch fails and the loop burns through
+        # its retry budget by itself, which is the situation under test.
+        recorder.on_live_began(recorder._live)
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if not recorder.is_recording:
+                break
+
+        assert recorder.is_recording is False, (
+            "the recorder still claims to be recording after the download gave up"
+        )
+        assert len(segments) == 1, "the abandoned segment was never handed over"
+
+    @pytest.mark.asyncio
     async def test_segment_started_listener_gets_the_new_segment(self, recorder):
         """Regression: the start of a recording must be announced too.
 

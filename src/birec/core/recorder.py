@@ -195,6 +195,25 @@ class Recorder(LiveMonitorListener):
                 exc,
             )
 
+        if not self._is_recording:
+            # An ordinary stop: whoever asked for it is already closing the
+            # segment.
+            return
+
+        # The loop finished while the recording is still supposed to be running,
+        # so it gave up by itself: out of retries, or the stream URL never
+        # resolved. Nobody else will close this segment, and leaving it open
+        # means the task reports itself as recording for as long as the room
+        # stays live while not a single byte is being written.
+        logger.warning(
+            "Room %d: the download gave up, finalizing the recording",
+            self._room_id,
+        )
+        self._is_recording = False
+        self._statistics.stop()
+        self._stop_task = asyncio.create_task(self._stop_recording_async())
+        self._stop_task.add_done_callback(self._on_stop_done)
+
     def on_live_ended(self, live: Live) -> None:
         """Called when LiveMonitor detects live end."""
         if not self._is_recording:
