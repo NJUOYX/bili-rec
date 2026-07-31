@@ -173,7 +173,7 @@ class StartedSegment:
 
     Reported as the segment starts so that "recording began" can be announced
     with the paths it will be writing to, which is what a user watching the
-    dashboard or waiting on a notification is being told about.
+    dashboard is being told about.
     """
 
     video_path: str
