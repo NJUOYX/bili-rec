@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -285,6 +286,111 @@ class TestRecorder:
         assert recorder.is_recording is False
         assert recorder._download_task is None
         assert recorder._flv_impl is None
+
+    @pytest.mark.asyncio
+    async def test_a_download_that_gives_up_finalizes_the_recording(
+        self, recorder, monkeypatch
+    ):
+        """Regression: a loop out of retries must not leave the task 'recording'.
+
+        The download loop stops after ten failed attempts, and nothing was
+        watching for that. ``_is_recording`` stayed true, so the task went on
+        reporting itself as recording for as long as the room stayed live, with
+        the segment never closed, never post-processed, and not one byte being
+        written. What the user saw and what was happening had nothing to do with
+        each other.
+        """
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._RECONNECT_BASE_DELAY", 0.001
+        )
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._RECONNECT_MAX_DELAY", 0.001
+        )
+        segments = []
+        recorder.set_segment_listener(segments.append)
+
+        # The session is a mock, so every fetch fails and the loop burns through
+        # its retry budget by itself, which is the situation under test.
+        recorder.on_live_began(recorder._live)
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if not recorder.is_recording:
+                break
+
+        assert recorder.is_recording is False, (
+            "the recorder still claims to be recording after the download gave up"
+        )
+        assert len(segments) == 1, "the abandoned segment was never handed over"
+
+    @pytest.mark.asyncio
+    async def test_a_stream_that_never_delivers_bytes_is_given_up_on(
+        self, recorder, monkeypatch
+    ):
+        """Regression: an endpoint answering with an empty body is not forever.
+
+        A connection ending cleanly is the ordinary end of a live stream, so the
+        retry budget was reset every time one did. An endpoint that answers and
+        immediately closes ends cleanly too, so it was retryable without limit:
+        the task claimed to be recording a file that never grew past its header,
+        for as long as the room stayed live.
+        """
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._RECONNECT_BASE_DELAY", 0.001
+        )
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._RECONNECT_MAX_DELAY", 0.001
+        )
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._STREAM_END_DELAY", 0.001
+        )
+
+        async def _nothing_at_all(_url):
+            """A fetch that succeeds and yields not a single chunk."""
+            return
+            yield b""  # pragma: no cover - makes this an async generator
+
+        monkeypatch.setattr(
+            "birec.core.operators.stream_fetcher.StreamFetcher.fetch", _nothing_at_all
+        )
+        segments = []
+        recorder.set_segment_listener(segments.append)
+
+        recorder.on_live_began(recorder._live)
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if not recorder.is_recording:
+                break
+
+        assert recorder.is_recording is False, (
+            "an endpoint that never sends anything was retried without limit"
+        )
+        assert len(segments) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_unparseable_stream_finalizes_the_recording(self, recorder):
+        """Regression: a dead pipeline must not look like an ongoing recording.
+
+        Reactivex delivers ``on_error`` once and tears the chain down, so after
+        one unparseable byte nothing further is ever written. The error was only
+        logged, so the file stopped growing while the task kept reporting itself
+        as recording and the download kept burning bandwidth — the same silent
+        loss as #9, from a third direction.
+        """
+        segments = []
+        recorder.set_segment_listener(segments.append)
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder.is_recording is True
+
+        recorder.stream_recorder.create_flv_pipeline(
+            Path(recorder.stream_recorder.current_video_path)
+        )
+        recorder.stream_recorder.feed_flv_data(b"FLV\x01\x05\x00\x00\x00\x09")
+        recorder.stream_recorder.feed_flv_data(b"\x00" * 32)
+        await asyncio.sleep(0.05)
+
+        assert recorder.is_recording is False
+        assert len(segments) == 1
 
     @pytest.mark.asyncio
     async def test_segment_started_listener_gets_the_new_segment(self, recorder):

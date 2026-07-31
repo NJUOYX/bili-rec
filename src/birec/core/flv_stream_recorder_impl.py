@@ -32,6 +32,8 @@ _RECONNECT_BASE_DELAY = 1.0
 _RECONNECT_MAX_DELAY = 30.0
 # Statistics tick interval (seconds).
 _STATS_TICK_INTERVAL = 2.0
+# How long to wait before re-fetching a stream that ended cleanly.
+_STREAM_END_DELAY = 1.0
 
 
 class FLVStreamRecorderImpl:
@@ -94,8 +96,15 @@ class FLVStreamRecorderImpl:
         """Resolve URL, fetch, and feed data in a retry loop."""
         sr = self._stream_recorder
         params = self._stream_params
+        first_attempt = True
 
         while self._running:
+            # Anything the previous connection left half-written belongs to a
+            # document that has ended; the next one starts its own.
+            if not first_attempt:
+                sr.discard_partial_stream()
+            first_attempt = False
+
             # 1. Resolve stream URL
             try:
                 url = await self._url_resolver.resolve(
@@ -130,10 +139,12 @@ class FLVStreamRecorderImpl:
                 "Downloading FLV stream from %s",
                 parsed.hostname or url[:60],
             )
+            delivered = False
             try:
                 async for chunk in self._fetcher.fetch(url):
                     if not self._running:
                         break
+                    delivered = True
                     sr.feed_flv_data(chunk)
                     sr.statistics.update_dl(len(chunk))
             except (aiohttp.ClientError, TimeoutError) as exc:
@@ -151,12 +162,22 @@ class FLVStreamRecorderImpl:
                     break
                 continue
 
-            # Stream ended normally (server closed connection).
-            # For live streams this usually means a reconnect is needed.
-            if self._running:
-                logger.info("Stream ended, reconnecting...")
+            # Stream ended normally (server closed connection). For live
+            # streams that usually means a reconnect is needed.
+            if not self._running:
+                break
+            logger.info("Stream ended, reconnecting...")
+            if delivered:
+                # A connection that carried data is evidence the stream is
+                # healthy, so the retry budget starts over.
                 self._error_handler.reset()
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(_STREAM_END_DELAY)
+            elif not await self._handle_error():
+                # One that carried nothing is not evidence of anything. Resetting
+                # the budget on those makes an endpoint answering 200 with an
+                # empty body retryable forever, with the task claiming to record
+                # a file that never grows past its header.
+                break
 
     async def _handle_error(self) -> bool:
         """Handle a connection error. Returns True if should retry."""

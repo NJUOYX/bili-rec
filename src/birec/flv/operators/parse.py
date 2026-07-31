@@ -72,6 +72,18 @@ def parse(
                     )
                 last_tag = None
 
+            def at_flv_header(stream: RandomIO) -> bool:
+                """Whether the stream is sitting on an FLV file header.
+
+                A tag header starts with its type, one of 8, 9 or 18, so the
+                ``FLV`` magic can never be the start of one: seeing it means a
+                new FLV document begins here.
+                """
+                position = stream.tell()
+                magic = stream.read(3)
+                stream.seek(position)
+                return magic == b"FLV"
+
             def on_next(stream: RandomIO) -> None:
                 nonlocal parser, header, last_tag
 
@@ -106,6 +118,18 @@ def parse(
                 while not disposed:
                     tag_offset = stream.tell()
                     try:
+                        if at_flv_header(stream):
+                            # The download reconnected and the CDN started a
+                            # fresh FLV document. Swallow its header and keep
+                            # going with the tags behind it: passing it on would
+                            # write a second file header into the middle of the
+                            # recording, and treating it as corruption would end
+                            # the stream and silently drop everything after the
+                            # first dropped connection.
+                            parser.parse_header()
+                            parser.parse_previous_tag_size()
+                            logger.info("Stream restarted, continuing the recording")
+                            continue
                         tag = parser.parse_tag()
                         parser.parse_previous_tag_size()
                         last_tag = tag

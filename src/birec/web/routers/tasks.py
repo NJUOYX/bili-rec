@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
+from ...bili.exceptions import ApiRequestError
 from ...task import RecordTaskManager, RunningStatus, TaskData
 from ..models import ResponseMessage
 
@@ -376,6 +377,13 @@ async def add_task(request: Request, body: AddTaskRequest) -> dict[str, Any]:
         task = await manager.add_task(body.room_id, auto_enable=body.auto_enable)
     except ValueError as exc:
         return ResponseMessage(code=409, message=str(exc)).to_dict()
+    except ApiRequestError as exc:
+        # Bilibili refused to tell us about the room. Without its info there is
+        # no task to build, and the caller needs to hear that as an answer
+        # rather than as a 500 from a stray exception.
+        return ResponseMessage(
+            code=502, message=f"Bilibili API error: {exc.message or exc.code}"
+        ).to_dict()
     except RuntimeError as exc:
         return ResponseMessage(code=500, message=str(exc)).to_dict()
     return _ok({"room_id": task.room_id}, message="Task added")
