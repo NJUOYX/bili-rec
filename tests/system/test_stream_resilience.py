@@ -165,46 +165,46 @@ class TestGivingUp:
 class TestDeadCdn:
     """The API offers several CDNs; one of them being down is ordinary."""
 
-    @pytest.mark.xfail(
-        reason="the download loop never asks for an alternative CDN",
-        strict=True,
-    )
     async def test_an_unreachable_cdn_falls_back_to_a_working_one(
         self, client: AsyncClient, fake_server: FakeBiliServer, out_dir: Path
     ) -> None:
-        """A dead first CDN should cost a retry, not the whole recording.
+        """Regression: a dead first CDN must cost a retry, not the recording.
 
-        It costs the recording. ``StreamURLResolver`` has ``resolve_alternative``
-        for exactly this, and nothing calls it: the loop re-resolves after every
-        failure, ``_build_stream_url`` always takes ``url_info[0]``, so the same
-        dead host comes back ten times and the recording is abandoned with an
-        entirely healthy CDN sitting second in the list.
-
-        Strict, so it turns green the day the fallback is wired up.
+        ``StreamURLResolver`` had ``resolve_alternative`` for exactly this and
+        nothing called it. The loop re-resolved after every failure and
+        ``_build_stream_url`` always takes ``url_info[0]``, so the same dead host
+        came back ten times and the recording was abandoned with an entirely
+        healthy CDN sitting second in the list.
         """
         fake_server.set_fault(stream_dead_cdn_first=True)
 
         await add_task(client)
         await begin_live(client, fake_server)
 
-        await wait_for_recording(out_dir, min_size=1000, timeout=4.0)
+        await wait_for_recording(out_dir, min_size=1000, timeout=10.0)
+        assert fake_server.stream_requests > 0, "the live CDN was never reached"
 
-    async def test_an_unreachable_cdn_is_reported_rather_than_hidden(
+    async def test_a_working_cdn_is_not_abandoned_over_a_hiccup(
         self, client: AsyncClient, fake_server: FakeBiliServer, out_dir: Path
     ) -> None:
-        """Until the fallback exists, the failure must at least be visible.
+        """Switching away is for hosts that never delivered, not for every drop.
 
-        This pins today's behaviour: no recording is produced, and the task
-        settles out of the recording state instead of claiming to work.
+        A CDN that has been streaming happily and then drops one connection is
+        the ordinary case; walking away from it each time would keep re-resolving
+        and bouncing between hosts instead of picking the stream back up.
         """
-        fake_server.set_fault(stream_dead_cdn_first=True)
+        fake_server.set_fault(stream_break_after_chunks=30, stream_break_times=1)
 
         await add_task(client)
         await begin_live(client, fake_server)
-        await wait_until_recording(client)
+        flv = await wait_for_recording(out_dir, min_size=1000)
 
-        await wait_until_not_recording(client)
-        assert fake_server.stream_requests == 0, "the live CDN was never tried"
+        await wait_until(lambda: fake_server.stream_requests >= 2, what="the reconnect")
+        size = flv.stat().st_size
+        await wait_until(
+            lambda: flv.stat().st_size > size,
+            what="the same CDN to carry on after the drop",
+        )
 
 
 class TestAStreamThatOffersNothing:
