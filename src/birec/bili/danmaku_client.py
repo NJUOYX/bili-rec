@@ -77,6 +77,7 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
         self._hosts: list[str] = []
         self._token: str = ""
         self._host_index: int = 0
+        self._port: int | None = None
 
         # Connection state
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -135,11 +136,19 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
 
     # --- Danmaku server info ---
 
-    def set_danmu_info(self, hosts: list[str], token: str) -> None:
-        """Set danmaku server hosts and auth token from get_danmu_info API."""
+    def set_danmu_info(
+        self, hosts: list[str], token: str, *, port: int | None = None
+    ) -> None:
+        """Set danmaku server hosts and auth token from get_danmu_info API.
+
+        ``port`` comes from the same response. It is almost always 443, but the
+        API is entitled to hand out another one and dropping it on the floor
+        leaves us connecting to the wrong place.
+        """
         self._hosts = hosts
         self._token = token
         self._host_index = 0
+        self._port = port
 
     # --- AsyncStoppableMixin ---
 
@@ -204,13 +213,24 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
         finally:
             await self._close_connection()
 
+    def _build_url(self, host: str) -> str:
+        """Build the broadcast WebSocket URL for a host from get_danmu_info.
+
+        The scheme follows the port: 443 is the TLS endpoint the API normally
+        advertises, anything else is plaintext.
+        """
+        port = self._port
+        if port is None or port == 443:
+            return f"wss://{host}/sub"
+        return f"ws://{host}:{port}/sub"
+
     async def _connect_and_receive(self) -> None:
         """Establish WS connection, authenticate, and receive messages."""
         if not self._hosts:
             raise RuntimeError("No danmaku hosts configured")
 
         host = self._hosts[self._host_index]
-        url = f"wss://{host}/sub"
+        url = self._build_url(host)
 
         headers: dict[str, str] = {}
         if self._user_agent:

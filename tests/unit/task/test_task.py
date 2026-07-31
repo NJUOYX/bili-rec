@@ -42,7 +42,10 @@ def _make_live() -> MagicMock:
     live.get_live_status = AsyncMock(return_value=LiveStatus.LIVE)
     live.api.get_danmu_info = AsyncMock(
         return_value={
-            "host_list": [{"host": "broadcastlv.chat.bilibili.com"}, {"host": ""}],
+            "host_list": [
+                {"host": "broadcastlv.chat.bilibili.com", "wss_port": 443},
+                {"host": ""},
+            ],
             "token": "danmu-token",
         }
     )
@@ -223,11 +226,15 @@ class TestRecordTaskLifecycle:
         comps["live"].init.assert_awaited_once()
 
     async def test_setup_feeds_danmaku_hosts(self) -> None:
-        """Without hosts the danmaku client can never open its WebSocket."""
+        """Without hosts the danmaku client can never open its WebSocket.
+
+        The port travels with them: the API states it alongside each host, and
+        assuming 443 would be ignoring what it told us.
+        """
         task, comps = _make_task()
         await task.setup()
         comps["danmaku_client"].set_danmu_info.assert_called_once_with(
-            ["broadcastlv.chat.bilibili.com"], "danmu-token"
+            ["broadcastlv.chat.bilibili.com"], "danmu-token", port=443
         )
 
     async def test_setup_feeds_hosts_even_when_monitor_disabled(self) -> None:

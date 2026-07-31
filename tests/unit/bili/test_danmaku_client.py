@@ -311,6 +311,33 @@ class TestAuthReply:
             await client._wait_auth_reply()
 
 
+class TestBroadcastUrl:
+    """The URL must follow what get_danmu_info advertised."""
+
+    def test_the_default_is_the_tls_endpoint(self) -> None:
+        client = _make_client()
+        client.set_danmu_info(["broadcastlv.chat.bilibili.com"], "t")
+        assert (
+            client._build_url("broadcastlv.chat.bilibili.com")
+            == "wss://broadcastlv.chat.bilibili.com/sub"
+        )
+
+    def test_port_443_stays_on_tls(self) -> None:
+        client = _make_client()
+        client.set_danmu_info(["host.example"], "t", port=443)
+        assert client._build_url("host.example") == "wss://host.example/sub"
+
+    def test_another_port_is_honoured(self) -> None:
+        """Regression: the port from the API used to be dropped on the floor.
+
+        The URL was hardcoded to ``wss://{host}/sub``, so any endpoint not on
+        443 was simply unreachable, whatever the API said.
+        """
+        client = _make_client()
+        client.set_danmu_info(["127.0.0.1"], "t", port=8080)
+        assert client._build_url("127.0.0.1") == "ws://127.0.0.1:8080/sub"
+
+
 class TestConnectionState:
     def test_connected_false_initially(self) -> None:
         client = _make_client()

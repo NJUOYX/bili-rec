@@ -8,10 +8,40 @@ FLV stream endpoint, and a WebSocket danmaku endpoint.
 from __future__ import annotations
 
 import asyncio
+import json
 import struct
+import time
 from typing import Any
 
-from aiohttp import web
+from aiohttp import WSMsgType, web
+
+# The broadcast protocol, mirrored from birec.bili.danmaku_client: a 16-byte
+# header of total length, header length, protocol version, operation, sequence.
+_HEADER = struct.Struct(">IHHiI")
+_OP_HEARTBEAT = 2
+_OP_HEARTBEAT_REPLY = 3
+_OP_NOTIFICATION = 5
+_OP_AUTH = 7
+_OP_AUTH_REPLY = 8
+_PROTO_NORMAL = 0
+
+
+def _encode_packet(op: int, body: bytes) -> bytes:
+    header = _HEADER.pack(len(body) + 16, 16, _PROTO_NORMAL, op, 1)
+    return header + body
+
+
+def _decode_packets(data: bytes) -> list[tuple[int, bytes]]:
+    """Split a frame into (operation, body) pairs."""
+    packets: list[tuple[int, bytes]] = []
+    offset = 0
+    while offset + 16 <= len(data):
+        total_len, header_len, _ver, op, _seq = _HEADER.unpack_from(data, offset)
+        if total_len < header_len or offset + total_len > len(data):
+            break
+        packets.append((op, data[offset + header_len : offset + total_len]))
+        offset += total_len
+    return packets
 
 
 def _make_flv_header() -> bytes:
@@ -115,6 +145,9 @@ class FakeBiliServer:
         self.playlist_requests = 0
         self.segment_requests = 0
         self._hls_media_sequence = 0
+        # Auth payloads the broadcast endpoint received, so a test can check
+        # what the client claimed about itself.
+        self.auth_payloads: list[str] = []
 
     def _setup_routes(self) -> None:
         # Both API platforms are served: ``Live`` defaults to the web platform,
@@ -136,7 +169,8 @@ class FakeBiliServer:
         self._app.router.add_get("/stream.flv", self._handle_stream)
         self._app.router.add_get("/live.m3u8", self._handle_playlist)
         self._app.router.add_get("/seg/{name}", self._handle_segment)
-        self._app.router.add_get("/ws/danmaku", self._handle_ws_danmaku)
+        # The path the real broadcast servers use.
+        self._app.router.add_get("/sub", self._handle_ws_danmaku)
 
     @property
     def base_url(self) -> str:
@@ -290,6 +324,8 @@ class FakeBiliServer:
                     {
                         "host": "127.0.0.1",
                         "port": self.port,
+                        # The client picks the TLS port; this server is
+                        # plaintext, so it advertises its own here.
                         "wss_port": self.port,
                         "ws_port": self.port,
                     }
@@ -369,21 +405,54 @@ class FakeBiliServer:
         return web.Response(body=body, content_type="video/mp4")
 
     async def _handle_ws_danmaku(self, request: web.Request) -> web.WebSocketResponse:
-        """WebSocket danmaku endpoint."""
+        """Broadcast endpoint speaking the real packet framing.
+
+        The client will not consider itself connected until it has been through
+        the handshake, so the fake has to answer the auth packet properly rather
+        than just accepting the socket.
+        """
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         self.danmaku_ws_connections.append(ws)
         try:
-            async for _msg in ws:
-                pass  # Ignore incoming messages
+            async for msg in ws:
+                if msg.type != WSMsgType.BINARY:
+                    continue
+                for op, body in _decode_packets(msg.data):
+                    if op == _OP_AUTH:
+                        self.auth_payloads.append(body.decode("utf-8", "replace"))
+                        await ws.send_bytes(
+                            _encode_packet(_OP_AUTH_REPLY, b'{"code":0}')
+                        )
+                    elif op == _OP_HEARTBEAT:
+                        await ws.send_bytes(
+                            _encode_packet(_OP_HEARTBEAT_REPLY, b"\x00\x00\x00\x01")
+                        )
         finally:
             self.danmaku_ws_connections.remove(ws)
         return ws
 
     async def send_danmaku_command(self, cmd: str, data: dict[str, Any]) -> None:
         """Broadcast a danmaku command to all connected WS clients."""
-        import json
-
-        msg = json.dumps({"cmd": cmd, **data})
+        payload = json.dumps({"cmd": cmd, **data}).encode("utf-8")
+        packet = _encode_packet(_OP_NOTIFICATION, payload)
         for ws in self.danmaku_ws_connections:
-            await ws.send_str(msg)
+            await ws.send_bytes(packet)
+
+    async def send_danmaku(self, text: str, *, uname: str = "Viewer") -> None:
+        """Broadcast one ordinary danmaku message.
+
+        The wire timestamp is in milliseconds and has to be roughly now: the
+        dumper writes each message's offset from the start of the recording, so
+        a fixed date in the past would land every line far outside the video.
+        """
+        await self.send_danmaku_command(
+            "DANMU_MSG",
+            {
+                "info": [
+                    [0, 1, 25, 0xFFFFFF, int(time.time() * 1000), 0, "", 0, 0, 0],
+                    text,
+                    [12345, uname, 0, 0, 0, 10000, 1, ""],
+                ]
+            },
+        )
