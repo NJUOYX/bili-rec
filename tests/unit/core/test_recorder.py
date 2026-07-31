@@ -72,10 +72,20 @@ class TestStreamRecorder:
 
     @pytest.mark.asyncio
     async def test_start_recording(self, recorder, tmp_path):
-        path = await recorder.start_recording()
+        segment = await recorder.start_recording()
         assert recorder.is_recording is True
-        assert path.endswith(".flv")
-        assert "12345" in path
+        assert segment.video_path.endswith(".flv")
+        assert "12345" in segment.video_path
+
+    @pytest.mark.asyncio
+    async def test_start_recording_reports_the_danmaku_files(self, recorder):
+        """The paths a segment opens are what "recording began" is about."""
+        recorder.setup_danmaku(DanmakuReceiver(), RawDanmakuReceiver())
+
+        segment = await recorder.start_recording()
+
+        assert segment.danmaku_path.endswith(".xml")
+        assert segment.raw_danmaku_path.endswith(".jsonl")
 
     @pytest.mark.asyncio
     async def test_stop_recording(self, recorder):
@@ -275,6 +285,40 @@ class TestRecorder:
         assert recorder.is_recording is False
         assert recorder._download_task is None
         assert recorder._flv_impl is None
+
+    @pytest.mark.asyncio
+    async def test_segment_started_listener_gets_the_new_segment(self, recorder):
+        """Regression: the start of a recording must be announced too.
+
+        Only the recorder knows a segment has opened and which files it is
+        writing to, and nothing asked it: the "recording began" events the
+        notification module offers had no producer at all.
+        """
+        started = []
+        recorder.set_segment_started_listener(started.append)
+
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+
+        assert len(started) == 1
+        assert started[0].video_path.endswith(".flv")
+
+    @pytest.mark.asyncio
+    async def test_segment_started_listener_failure_does_not_stop_the_recording(
+        self, recorder
+    ):
+        """A broken listener must not cost the user the recording itself."""
+
+        def _boom(_segment):
+            raise RuntimeError("listener exploded")
+
+        recorder.set_segment_started_listener(_boom)
+
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+
+        assert recorder.is_recording is True
+        assert recorder._flv_impl is not None
 
     @pytest.mark.asyncio
     async def test_segment_listener_gets_the_finished_segment(self, recorder):

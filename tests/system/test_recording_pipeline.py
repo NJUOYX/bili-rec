@@ -203,27 +203,31 @@ class TestRecordingReachesDisk:
         # total, but it holds accumulated seconds and only moves on stop.)
         assert status["dl_total"] > 0
 
-    @pytest.mark.xfail(
-        reason="VideoFileCreatedEvent has no producer anywhere in src/",
-        strict=True,
-    )
     async def test_the_file_creation_is_announced(
         self, client: AsyncClient, fake_server: FakeBiliServer, events: list[Any]
     ) -> None:
-        """Starting to record should reach the event bus the WebSocket serves.
+        """Regression: starting to record must reach the event bus.
 
-        It does not. The event class exists and the notification module lists it
-        as something a user can subscribe to, but nothing ever submits it, so
-        "recording started" never arrives. Same shape as #10: defined, wired to
-        nothing. Kept here, and strict, so it turns green the day it is fixed.
+        The event class existed and the notification module listed it as
+        something a user can subscribe to, but nothing ever submitted it, so
+        "recording started" never arrived. Same shape as #10: defined, wired to
+        nothing.
         """
         await _add_task(client)
         await _begin_live(client, fake_server)
 
         await _wait_until(
             lambda: any(e.type == "VideoFileCreatedEvent" for e in events),
-            timeout=5.0,
             what="a VideoFileCreatedEvent",
+        )
+        created = next(e for e in events if e.type == "VideoFileCreatedEvent")
+        assert created.data.room_id == _ROOM_ID
+        assert created.data.path.endswith(".flv")
+
+        # The danmaku file is opened by the same segment, so it is announced too.
+        await _wait_until(
+            lambda: any(e.type == "DanmakuFileCreatedEvent" for e in events),
+            what="a DanmakuFileCreatedEvent",
         )
 
 

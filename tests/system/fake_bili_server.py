@@ -178,7 +178,11 @@ class FakeBiliServer:
                     "online": 42,
                     "tags": "test",
                     "description": "测试直播间",
-                    "cover": f"{self.base_url}/cover.jpg",
+                    # Left empty on purpose. Cover URLs are forced to https by
+                    # the API layer, which this plaintext server cannot serve,
+                    # and a room without a cover is an ordinary case anyway.
+                    # The cover wiring is covered by the unit tests.
+                    "cover": "",
                 },
                 "anchor_info": {
                     "base_info": {

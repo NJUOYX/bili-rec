@@ -16,7 +16,7 @@ from .cover_downloader import CoverDownloader
 from .danmaku_receiver import DanmakuReceiver
 from .flv_stream_recorder_impl import FLVStreamRecorderImpl
 from .metadata_provider import MetadataProvider
-from .models import CompletedSegment
+from .models import CompletedSegment, StartedSegment
 from .path_provider import PathProvider
 from .raw_danmaku_receiver import RawDanmakuReceiver
 from .statistics import Statistics
@@ -65,6 +65,9 @@ class Recorder(LiveMonitorListener):
         self._download_task: asyncio.Task[None] | None = None
         self._flv_impl: FLVStreamRecorderImpl | None = None
         self._segment_listener: Callable[[CompletedSegment], None] | None = None
+        self._segment_started_listener: Callable[[StartedSegment], None] | None = None
+        self._cover_listener: Callable[[str], None] | None = None
+        self._cover_task: asyncio.Task[None] | None = None
 
         # Set up danmaku if provided
         if danmaku_receiver:
@@ -120,6 +123,21 @@ class Recorder(LiveMonitorListener):
         """
         self._segment_listener = listener
 
+    def set_segment_started_listener(
+        self, listener: Callable[[StartedSegment], None] | None
+    ) -> None:
+        """Register the callback fired once a segment's files are opened.
+
+        The counterpart of :meth:`set_segment_listener`: this is how anything
+        outside the recorder learns that a recording has begun and which files
+        it is writing to.
+        """
+        self._segment_started_listener = listener
+
+    def set_cover_listener(self, listener: Callable[[str], None] | None) -> None:
+        """Register the callback fired once a cover image has been saved."""
+        self._cover_listener = listener
+
     def on_live_began(self, live: Live) -> None:
         """Called when LiveMonitor detects live start."""
         if self._is_recording:
@@ -136,7 +154,8 @@ class Recorder(LiveMonitorListener):
 
     async def _start_recording_async(self) -> None:
         """Internal async start: initialize segment then start download loop."""
-        await self._stream_recorder.start_recording()
+        segment = await self._stream_recorder.start_recording()
+        self._notify_segment_started(segment)
         # Launch FLV download loop as a background task.
         self._flv_impl = FLVStreamRecorderImpl(
             self._stream_recorder,
@@ -146,6 +165,9 @@ class Recorder(LiveMonitorListener):
         )
         self._download_task = asyncio.create_task(self._flv_impl.run())
         self._download_task.add_done_callback(self._on_download_done)
+        # The cover is a nice-to-have next to the recording, so it is fetched
+        # after the download loop is up and never allowed to hold it back.
+        self._cover_task = asyncio.create_task(self._download_cover_async())
 
     def _on_start_done(self, task: asyncio.Task[None]) -> None:
         """Handle start task completion."""
@@ -196,11 +218,51 @@ class Recorder(LiveMonitorListener):
             self._download_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._download_task
+        if self._cover_task is not None and not self._cover_task.done():
+            self._cover_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._cover_task
+        self._cover_task = None
         self._flv_impl = None
         self._download_task = None
         segment = await self._stream_recorder.stop_recording()
         if segment is not None:
             self._notify_segment_completed(segment)
+
+    async def _download_cover_async(self) -> None:
+        """Fetch the room's cover image alongside the recording.
+
+        Best-effort by design: a room without a usable cover, or a CDN having a
+        bad day, must never disturb the recording that is already running.
+        """
+        room_info = self._live.room_info
+        if room_info is None or not room_info.cover:
+            return
+        try:
+            path = await self._stream_recorder.download_cover(room_info.cover)
+        except Exception:
+            logger.exception("Room %d: cover download failed", self._room_id)
+            return
+        if path and self._cover_listener is not None:
+            try:
+                self._cover_listener(path)
+            except Exception:
+                logger.exception(
+                    "Room %d: cover listener failed for %s", self._room_id, path
+                )
+
+    def _notify_segment_started(self, segment: StartedSegment) -> None:
+        """Announce the new segment without letting a listener abort the start."""
+        if self._segment_started_listener is None:
+            return
+        try:
+            self._segment_started_listener(segment)
+        except Exception:
+            logger.exception(
+                "Room %d: segment started listener failed for %s",
+                self._room_id,
+                segment.video_path,
+            )
 
     def _notify_segment_completed(self, segment: CompletedSegment) -> None:
         """Hand the finished segment over without letting a listener break stop."""

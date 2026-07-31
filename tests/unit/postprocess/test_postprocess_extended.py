@@ -639,9 +639,7 @@ class TestPostprocessorExtended:
         assert not m3u8_file.exists()
 
     @pytest.mark.asyncio
-    async def test_source_survives_when_the_remux_is_off(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_source_survives_when_the_remux_is_off(self, tmp_path: Path) -> None:
         """Regression: turning the remux off must not delete the recording.
 
         Deleting the source was the last step regardless, and the remux was the

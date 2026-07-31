@@ -11,7 +11,7 @@ import pytest
 
 from birec.bili.live_monitor import LiveMonitor
 from birec.bili.models import LiveStatus, RoomInfo, UserInfo
-from birec.core.models import CompletedSegment
+from birec.core.models import CompletedSegment, StartedSegment
 from birec.core.path_provider import PathProvider
 from birec.core.recorder import Recorder
 from birec.postprocess.danmaku_to_ass import DanmakuToAssConfig
@@ -287,6 +287,71 @@ class TestRecordTaskPostprocessingWiring:
         listener = comps["recorder"].set_segment_listener.call_args[0][0]
         assert callable(listener)
         return listener  # type: ignore[no-any-return]
+
+    def _started_listener(self, comps: dict[str, MagicMock]) -> Callable[..., None]:
+        """The callback the task registered for a segment starting."""
+        listener = comps["recorder"].set_segment_started_listener.call_args[0][0]
+        assert callable(listener)
+        return listener  # type: ignore[no-any-return]
+
+    def _cover_listener(self, comps: dict[str, MagicMock]) -> Callable[..., None]:
+        """The callback the task registered for a downloaded cover."""
+        listener = comps["recorder"].set_cover_listener.call_args[0][0]
+        assert callable(listener)
+        return listener  # type: ignore[no-any-return]
+
+    def test_started_files_are_announced(self) -> None:
+        """Regression: the "recording began" events had no producer at all.
+
+        Three event classes existed and the notification module offered them as
+        something to subscribe to, but nothing ever submitted one, so the whole
+        family was unreachable.
+        """
+        event_center = MagicMock()
+        task, comps = _make_task(event_center=event_center)
+
+        self._started_listener(comps)(
+            StartedSegment(
+                video_path="/rec/a.flv",
+                danmaku_path="/rec/a.xml",
+                raw_danmaku_path="/rec/a.jsonl",
+            )
+        )
+
+        submitted = [call.args[0] for call in event_center.submit.call_args_list]
+        assert [event.type for event in submitted] == [
+            "VideoFileCreatedEvent",
+            "DanmakuFileCreatedEvent",
+            "RawDanmakuFileCreatedEvent",
+        ]
+        assert submitted[0].data.room_id == 12345
+        assert submitted[0].data.path == "/rec/a.flv"
+
+    def test_a_segment_without_danmaku_announces_only_the_video(self) -> None:
+        """Recording with danmaku off must not claim files that do not exist."""
+        event_center = MagicMock()
+        task, comps = _make_task(event_center=event_center)
+
+        self._started_listener(comps)(StartedSegment(video_path="/rec/a.flv"))
+
+        submitted = [call.args[0] for call in event_center.submit.call_args_list]
+        assert [event.type for event in submitted] == ["VideoFileCreatedEvent"]
+
+    def test_a_downloaded_cover_is_announced(self) -> None:
+        """Regression: CoverImageDownloadedEvent had no producer either.
+
+        The download itself was unreachable too: nothing in ``src`` ever called
+        ``download_cover``.
+        """
+        event_center = MagicMock()
+        task, comps = _make_task(event_center=event_center)
+
+        self._cover_listener(comps)("/rec/a.jpg")
+
+        event = event_center.submit.call_args.args[0]
+        assert event.type == "CoverImageDownloadedEvent"
+        assert event.data.room_id == 12345
+        assert event.data.path == "/rec/a.jpg"
 
     def test_finished_segment_is_submitted_with_its_danmaku(self) -> None:
         """Regression: the whole post-processing stage was never wired up.
