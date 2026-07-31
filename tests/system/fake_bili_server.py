@@ -111,6 +111,10 @@ class FakeBiliServer:
         # as long as a test needs it.
         self.stream_extra_frames = 400
         self.stream_requests = 0
+        # HLS counters and the sliding window's position.
+        self.playlist_requests = 0
+        self.segment_requests = 0
+        self._hls_media_sequence = 0
 
     def _setup_routes(self) -> None:
         # Both API platforms are served: ``Live`` defaults to the web platform,
@@ -130,6 +134,8 @@ class FakeBiliServer:
             )
         self._app.router.add_get("/x/web-interface/nav", self._handle_nav)
         self._app.router.add_get("/stream.flv", self._handle_stream)
+        self._app.router.add_get("/live.m3u8", self._handle_playlist)
+        self._app.router.add_get("/seg/{name}", self._handle_segment)
         self._app.router.add_get("/ws/danmaku", self._handle_ws_danmaku)
 
     @property
@@ -244,7 +250,30 @@ class FakeBiliServer:
                                         ],
                                     }
                                 ],
-                            }
+                            },
+                            {
+                                # The HLS variant the fmp4 stream format needs.
+                                "protocol_name": "http_hls",
+                                "format": [
+                                    {
+                                        "format_name": "fmp4",
+                                        "codec": [
+                                            {
+                                                "codec_name": "avc",
+                                                "current_qn": 10000,
+                                                "accept_qn": [10000, 400],
+                                                "base_url": "/live.m3u8",
+                                                "url_info": [
+                                                    {
+                                                        "host": self.base_url,
+                                                        "extra": "?token=fake",
+                                                    }
+                                                ],
+                                            }
+                                        ],
+                                    }
+                                ],
+                            },
                         ],
                     },
                 },
@@ -311,6 +340,33 @@ class FakeBiliServer:
             # The recorder hung up, which is exactly what stopping looks like.
             pass
         return resp
+
+    async def _handle_playlist(self, request: web.Request) -> web.Response:
+        """Serve a live HLS playlist that advances a sliding window each poll."""
+        self.playlist_requests += 1
+        first = self._hls_media_sequence
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:7",
+            "#EXT-X-TARGETDURATION:1",
+            f"#EXT-X-MEDIA-SEQUENCE:{first}",
+            '#EXT-X-MAP:URI="/seg/init.mp4"',
+        ]
+        for i in range(first, first + 3):
+            lines.append("#EXTINF:1.0,")
+            lines.append(f"/seg/{i}.m4s")
+        self._hls_media_sequence += 1
+        return web.Response(
+            text="\n".join(lines) + "\n",
+            content_type="application/vnd.apple.mpegurl",
+        )
+
+    async def _handle_segment(self, request: web.Request) -> web.Response:
+        """Serve an HLS segment: the init section, or a media segment."""
+        self.segment_requests += 1
+        name = request.match_info["name"]
+        body = b"\x00\x00\x00\x18ftypiso5" if name == "init.mp4" else b"\x00" * 512
+        return web.Response(body=body, content_type="video/mp4")
 
     async def _handle_ws_danmaku(self, request: web.Request) -> web.WebSocketResponse:
         """WebSocket danmaku endpoint."""

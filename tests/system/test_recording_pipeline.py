@@ -391,3 +391,68 @@ class TestPostProcessingAfterTheStop:
         completed = next(e for e in events if e.type == "VideoFileCompletedEvent")
         assert completed.data.room_id == _ROOM_ID
         assert completed.data.path.endswith(".flv")
+
+
+class TestHlsRecording:
+    """Choosing the HLS stream format must actually record over HLS."""
+
+    @pytest.mark.xfail(
+        reason="no HLS download loop exists; create_hls_pipeline has no caller",
+        strict=True,
+    )
+    async def test_choosing_fmp4_records_over_hls(
+        self, client: AsyncClient, fake_server: FakeBiliServer, out_dir: Path
+    ) -> None:
+        """Asking for fmp4 should pull the playlist, not silently fall back.
+
+        It does not. ``StreamRecorder`` can build an HLS pipeline, but nothing
+        in ``src`` ever calls ``create_hls_pipeline``: the only download loop
+        there is speaks FLV. So the setting is accepted, reported back, and
+        quietly ignored — the recording is FLV and the playlist is never
+        fetched. The same shape as #10 once more: built, never connected.
+
+        Strict, so it turns green the day the HLS loop lands.
+        """
+        resp = await client.patch(
+            "/api/v1/settings",
+            json={"recorder": {"stream_format": "fmp4"}},
+        )
+        assert resp.json()["code"] == 0
+
+        await _add_task(client)
+        await _begin_live(client, fake_server)
+
+        await _wait_until(
+            lambda: fake_server.playlist_requests > 0,
+            timeout=8.0,
+            what="the HLS playlist to be fetched",
+        )
+        assert fake_server.segment_requests > 0
+
+    async def test_the_fallback_to_flv_is_reported_honestly(
+        self, client: AsyncClient, fake_server: FakeBiliServer
+    ) -> None:
+        """Until HLS works, the status must not claim a format it is not using.
+
+        This pins today's behaviour so the fallback stays visible rather than
+        being mistaken for working HLS: the recording really is FLV, and that is
+        what the API reports.
+        """
+        await client.patch(
+            "/api/v1/settings",
+            json={"recorder": {"stream_format": "fmp4"}},
+        )
+        await _add_task(client)
+        await _begin_live(client, fake_server)
+
+        async def _has_format() -> bool:
+            return bool((await _status(client))["real_stream_format"])
+
+        deadline = asyncio.get_running_loop().time() + _TIMEOUT
+        while asyncio.get_running_loop().time() < deadline:
+            if await _has_format():
+                break
+            await asyncio.sleep(_POLL)
+
+        assert (await _status(client))["real_stream_format"] == "flv"
+        assert fake_server.playlist_requests == 0
