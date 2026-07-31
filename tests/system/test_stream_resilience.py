@@ -12,7 +12,6 @@ files, against a fake CDN that has been told to fail in a specific way.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -228,25 +227,33 @@ class TestAStreamThatOffersNothing:
 
         await wait_until_not_recording(client)
 
-    async def test_an_empty_stream_does_not_crash(
+    async def test_an_empty_stream_is_given_up_on(
         self, client: AsyncClient, fake_server: FakeBiliServer, out_dir: Path
     ) -> None:
-        """A 200 with no bytes at all is still an answer the loop must survive.
+        """Regression: an endpoint answering 200 with no body must not be forever.
 
-        Nothing is parseable, so nothing is recorded; the point is that the
-        recorder notices instead of spinning on an empty file forever.
+        A connection ending cleanly is the ordinary end of a live stream, so the
+        retry budget was reset every time one did. An endpoint that answers 200
+        and immediately closes ends cleanly too, so it was retryable without
+        limit: the task claimed to be recording a file that never grew past its
+        header, for as long as the room stayed live.
+
+        Now only a connection that actually carried bytes counts as evidence the
+        stream is healthy, so this one burns the budget and the segment closes.
         """
         fake_server.set_fault(stream_empty=True)
 
         await add_task(client)
         await begin_live(client, fake_server)
+        await wait_until_recording(client)
 
         await wait_until(
             lambda: fake_server.stream_requests >= 2,
             what="the empty stream to be retried",
         )
+        await wait_until_not_recording(client)
+
         # Nothing was parseable, so nothing but the header can have been written.
-        await asyncio.sleep(0.2)
         for flv in files(out_dir, ".flv"):
             assert flv.stat().st_size < 100, "bytes appeared out of an empty stream"
 

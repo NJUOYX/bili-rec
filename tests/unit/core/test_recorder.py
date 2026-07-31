@@ -323,6 +323,50 @@ class TestRecorder:
         assert len(segments) == 1, "the abandoned segment was never handed over"
 
     @pytest.mark.asyncio
+    async def test_a_stream_that_never_delivers_bytes_is_given_up_on(
+        self, recorder, monkeypatch
+    ):
+        """Regression: an endpoint answering with an empty body is not forever.
+
+        A connection ending cleanly is the ordinary end of a live stream, so the
+        retry budget was reset every time one did. An endpoint that answers and
+        immediately closes ends cleanly too, so it was retryable without limit:
+        the task claimed to be recording a file that never grew past its header,
+        for as long as the room stayed live.
+        """
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._RECONNECT_BASE_DELAY", 0.001
+        )
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._RECONNECT_MAX_DELAY", 0.001
+        )
+        monkeypatch.setattr(
+            "birec.core.flv_stream_recorder_impl._STREAM_END_DELAY", 0.001
+        )
+
+        async def _nothing_at_all(_url):
+            """A fetch that succeeds and yields not a single chunk."""
+            return
+            yield b""  # pragma: no cover - makes this an async generator
+
+        monkeypatch.setattr(
+            "birec.core.operators.stream_fetcher.StreamFetcher.fetch", _nothing_at_all
+        )
+        segments = []
+        recorder.set_segment_listener(segments.append)
+
+        recorder.on_live_began(recorder._live)
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if not recorder.is_recording:
+                break
+
+        assert recorder.is_recording is False, (
+            "an endpoint that never sends anything was retried without limit"
+        )
+        assert len(segments) == 1
+
+    @pytest.mark.asyncio
     async def test_an_unparseable_stream_finalizes_the_recording(self, recorder):
         """Regression: a dead pipeline must not look like an ongoing recording.
 
