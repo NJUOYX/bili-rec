@@ -216,8 +216,12 @@ class Postprocessor:
             # Metadata injection is optional - don't fail the whole task
             # if it fails
 
-        # Step 4: AUTO delete source
-        self._delete_source(item)
+        # Step 4: AUTO delete source, but only once something has taken its
+        # place. Skipping the remux skips the only step that produces a
+        # replacement, and an unknown format points the output back at the
+        # source; deleting in either case would destroy the recording outright.
+        if item.output_path != source and item.output_path.exists():
+            self._delete_source(item)
 
         item.status = PostprocessingStatus.COMPLETED
         item.progress = PostprocessingProgress(

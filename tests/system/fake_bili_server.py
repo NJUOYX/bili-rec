@@ -78,6 +78,16 @@ def generate_flv_stream(num_frames: int = 10) -> bytes:
     return bytes(buf)
 
 
+def generate_flv_tag_pairs(num_frames: int, start_frame: int = 0) -> bytes:
+    """Generate tag pairs without a header, to append to a running stream."""
+    buf = bytearray()
+    for i in range(start_frame, start_frame + num_frames):
+        ts = i * 40
+        buf += _make_video_tag(ts)
+        buf += _make_audio_tag(ts)
+    return bytes(buf)
+
+
 class FakeBiliServer:
     """Controllable fake Bilibili live server."""
 
@@ -92,6 +102,15 @@ class FakeBiliServer:
         self.port: int = 0
         self.flv_data = generate_flv_stream(20)
         self.danmaku_ws_connections: list[web.WebSocketResponse] = []
+        # A real CDN hands the stream over in many small writes. Serving the
+        # whole blob in one go hides every failure mode that only shows up at a
+        # chunk boundary, so the size is deliberately small and configurable.
+        self.stream_chunk_size = 64
+        self.stream_chunk_delay = 0.01
+        # Frames appended after the initial blob, to keep the stream alive for
+        # as long as a test needs it.
+        self.stream_extra_frames = 400
+        self.stream_requests = 0
 
     def _setup_routes(self) -> None:
         # Both API platforms are served: ``Live`` defaults to the web platform,
@@ -185,7 +204,6 @@ class FakeBiliServer:
             }
             return web.json_response(data)
 
-        stream_url = f"{self.base_url}/stream.flv"
         data = {
             "code": 0,
             "message": "ok",
@@ -206,11 +224,16 @@ class FakeBiliServer:
                                                     10000,
                                                     400,
                                                 ],
-                                                "base_url": stream_url,
+                                                # The real API splits the URL up:
+                                                # host + base_url + extra. Putting
+                                                # a whole URL in base_url makes the
+                                                # stream unreachable, which is how
+                                                # this fake used to be written.
+                                                "base_url": "/stream.flv",
                                                 "url_info": [
                                                     {
-                                                        "host": f"http://127.0.0.1:{self.port}",
-                                                        "extra": "/stream.flv",
+                                                        "host": self.base_url,
+                                                        "extra": "?token=fake",
                                                     }
                                                 ],
                                             }
@@ -260,16 +283,29 @@ class FakeBiliServer:
         return web.json_response(data)
 
     async def _handle_stream(self, request: web.Request) -> web.StreamResponse:
-        """Serve the FLV stream."""
+        """Serve the FLV stream in small chunks, the way a CDN does.
+
+        The chunking is the point: tags land split across writes, which is the
+        shape of the data the parser actually has to cope with in production.
+        """
+        self.stream_requests += 1
         resp = web.StreamResponse(
             status=200,
             headers={"Content-Type": "video/x-flv"},
         )
         await resp.prepare(request)
-        await resp.write(self.flv_data)
-        # Keep connection open briefly to simulate streaming
-        await asyncio.sleep(0.5)
-        await resp.write_eof()
+
+        payload = self.flv_data + generate_flv_tag_pairs(
+            self.stream_extra_frames, start_frame=20
+        )
+        try:
+            for start in range(0, len(payload), self.stream_chunk_size):
+                await resp.write(payload[start : start + self.stream_chunk_size])
+                await asyncio.sleep(self.stream_chunk_delay)
+            await resp.write_eof()
+        except (ConnectionResetError, asyncio.CancelledError):
+            # The recorder hung up, which is exactly what stopping looks like.
+            pass
         return resp
 
     async def _handle_ws_danmaku(self, request: web.Request) -> web.WebSocketResponse:

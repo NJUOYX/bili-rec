@@ -619,18 +619,66 @@ class TestPostprocessorExtended:
             inject_metadata_enabled=False,
         )
 
+        async def _remux(_src: Path, dst: Path) -> bool:
+            # A remux that reports success but leaves no file behind is not a
+            # remux; the deletion downstream is only safe because this exists.
+            dst.write_bytes(b"fake mp4")
+            return True
+
         with patch(
             "birec.postprocess.postprocessor.remux_flv_to_mp4",
-            new_callable=AsyncMock,
-            return_value=True,
+            new=_remux,
         ):
             await pp.start()
             pp.submit(source, output, related_files=[m3u8_file])
             await asyncio.sleep(0.2)
             await pp.stop()
 
+        assert output.exists()
         assert not source.exists()
         assert not m3u8_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_source_survives_when_the_remux_is_off(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: turning the remux off must not delete the recording.
+
+        Deleting the source was the last step regardless, and the remux was the
+        only step that would have produced a replacement. So switching it off —
+        an ordinary choice for someone who wants the original file — silently
+        destroyed every recording once it finished.
+        """
+        source = tmp_path / "test.flv"
+        source.write_bytes(b"fake flv")
+
+        pp = Postprocessor(remux_enabled=False, inject_metadata_enabled=False)
+        await pp.start()
+        pp.submit(source, tmp_path / "test.mp4")
+        await asyncio.sleep(0.2)
+        await pp.stop()
+
+        assert source.exists(), "the recording was deleted with nothing to replace it"
+        assert not (tmp_path / "test.mp4").exists()
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_format_is_not_deleted(self, tmp_path: Path) -> None:
+        """Regression: a format we cannot remux must not be deleted either.
+
+        The unknown-format branch points the output back at the source and calls
+        it a success, so the delete step then removed the very file it had just
+        declared to be the output.
+        """
+        source = tmp_path / "test.m3u8"
+        source.write_text("#EXTM3U")
+
+        pp = Postprocessor(remux_enabled=True, inject_metadata_enabled=False)
+        await pp.start()
+        pp.submit(source, tmp_path / "test.mp4")
+        await asyncio.sleep(0.2)
+        await pp.stop()
+
+        assert source.exists(), "the output was deleted for being its own source"
 
     @pytest.mark.asyncio
     async def test_exception_in_processing(self, tmp_path: Path) -> None:
