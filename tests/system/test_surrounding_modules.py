@@ -7,13 +7,15 @@ the question behind #10, and the one this file asks of each.
 
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 
-from birec.space import SpaceReclaimer
+from birec.space import SpaceInfo, SpaceReclaimer
 
 from .fake_bili_server import FakeBiliServer
 from .harness import add_task, begin_live
@@ -27,23 +29,69 @@ async def begin_recording(client: AsyncClient, fake_server: FakeBiliServer) -> N
 class TestDiskSpace:
     """Disk-space handling has to be reachable from the running application."""
 
-    @pytest.mark.xfail(
-        reason="nothing constructs a SpaceMonitor; the manager's slot stays None",
-        strict=True,
-    )
     async def test_the_application_watches_disk_space(
         self, client: AsyncClient
     ) -> None:
-        """A long recording filling the disk should be noticed.
+        """Regression: the disk has to actually be watched, not just watchable.
 
-        ``RecordTaskManager`` takes a monitor and a reclaimer, but nothing in
-        ``src`` ever builds one, so both slots are always ``None`` and the disk
-        is never watched. Once more: implemented, never connected.
-
-        Strict, so it turns green the day they are wired up.
+        ``RecordTaskManager`` took a monitor and a reclaimer and nothing ever
+        built one, so both slots were always ``None``. A tool meant to run for
+        weeks writing video had nobody looking at the disk it was filling.
         """
-        task_manager = client.app.state.application.task_manager  # type: ignore[attr-defined]
-        assert task_manager.space_monitor is not None
+        application = client.app.state.application  # type: ignore[attr-defined]
+
+        assert application.task_manager.space_monitor is not None
+        assert application.task_manager.space_reclaimer is not None
+        # Started with the manager, not merely handed to it.
+        assert application.space_monitor.is_running is True
+
+    async def test_a_full_disk_is_warned_about(
+        self, client: AsyncClient, out_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The user has to hear about it, because afterwards it is too late.
+
+        Driven through the real callback the monitor calls, so what is checked
+        is the reaction the application actually wired up rather than a
+        hand-rolled stand-in.
+        """
+        application = client.app.state.application  # type: ignore[attr-defined]
+        info = SpaceInfo(
+            total=100 * 1024**3, used=99 * 1024**3, free=1024**3, path=str(out_dir)
+        )
+
+        with caplog.at_level(logging.WARNING, logger="birec.application"):
+            application._on_space_low(info)  # noqa: SLF001
+
+        assert any("Low disk space" in record.message for record in caplog.records)
+
+    async def test_old_recordings_are_only_deleted_when_asked_for(
+        self, client: AsyncClient, out_dir: Path
+    ) -> None:
+        """Reclaiming space deletes the user's recordings, so it is opt-in.
+
+        ``recycle_records`` defaults to off. Filling the disk must not quietly
+        cost somebody the archive they were recording it for.
+        """
+        application = client.app.state.application  # type: ignore[attr-defined]
+        room_dir = out_dir / "12345 - TestStreamer"
+        room_dir.mkdir(parents=True, exist_ok=True)
+        old = room_dir / "blive_12345_old.flv"
+        old.write_bytes(b"x" * 4096)
+        os.utime(old, (0, 0))  # far older than any TTL
+
+        settings = application.settings_manager.settings
+        assert settings.space.recycle_records is False
+        info = SpaceInfo(
+            total=100 * 1024**3, used=99 * 1024**3, free=1024**3, path=str(out_dir)
+        )
+
+        application._on_space_low(info)  # noqa: SLF001
+        assert old.exists(), "a recording was deleted without being asked"
+
+        settings.space.recycle_records = True
+        application._space_reclaimer._rec_ttl = 0  # noqa: SLF001
+        application._on_space_low(info)  # noqa: SLF001
+        assert not old.exists(), "the reclaimer left the old recording behind"
 
     async def test_the_reclaimer_finds_old_recordings(self, out_dir: Path) -> None:
         """The reclaimer must work against a real directory of recordings.
