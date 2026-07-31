@@ -12,10 +12,36 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      # The wheel has to carry the web UI: without it `pip install birec`
+      # silently serves an API with no interface, because the app mounts the
+      # frontend only when it finds one.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: corepack enable
+      - name: Build the frontend
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Stage the frontend into the package
+        run: |
+          rm -rf src/birec/web/static
+          cp -r frontend/dist src/birec/web/static
+
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
       - run: uv build
+      - name: Verify the wheel ships the UI
+        run: |
+          wheel=$(ls dist/*.whl)
+          if ! unzip -l "$wheel" | grep -q 'birec/web/static/index.html'; then
+            echo "::error::$wheel carries no frontend; the release would ship without a UI"
+            exit 1
+          fi
+          echo "$wheel ships the UI"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:

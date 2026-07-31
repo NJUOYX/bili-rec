@@ -48,6 +48,10 @@ path = "src/birec/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/birec"]
+# The frontend build is not in version control, so hatchling would skip it.
+# Naming it as an artifact makes the wheel carry whatever the release pipeline
+# put there; a tree without a build simply ships without a UI (see README).
+artifacts = ["src/birec/web/static/**"]
 
 [tool.ruff]
 line-length = 88
