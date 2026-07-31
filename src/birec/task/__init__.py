@@ -10,17 +10,25 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..core.models import CompletedSegment
+from ..core.models import CompletedSegment, StartedSegment
 from ..event import (
+    CoverImageDownloadedEvent,
+    CoverImageDownloadedEventData,
     DanmakuFileCompletedEvent,
     DanmakuFileCompletedEventData,
+    DanmakuFileCreatedEvent,
+    DanmakuFileCreatedEventData,
     EventCenter,
     PostprocessingCompletedEvent,
     PostprocessingCompletedEventData,
     RawDanmakuFileCompletedEvent,
     RawDanmakuFileCompletedEventData,
+    RawDanmakuFileCreatedEvent,
+    RawDanmakuFileCreatedEventData,
     VideoFileCompletedEvent,
     VideoFileCompletedEventData,
+    VideoFileCreatedEvent,
+    VideoFileCreatedEventData,
     VideoPostprocessingCompletedEvent,
     VideoPostprocessingCompletedEventData,
 )
@@ -196,6 +204,8 @@ class RecordTask:
         # Close the loop between recording and post-processing: the recorder is
         # the only place that knows a segment is finished and what it produced.
         recorder.set_segment_listener(self._on_segment_completed)
+        recorder.set_segment_started_listener(self._on_segment_started)
+        recorder.set_cover_listener(self._on_cover_downloaded)
         postprocessor.set_completion_listener(self._on_postprocessing_completed)
 
     @property
@@ -243,6 +253,41 @@ class RecordTask:
         return RunningStatus.STOPPED
 
     # ── post-processing wiring ───────────────────────────────────
+
+    def _on_segment_started(self, segment: StartedSegment) -> None:
+        """Announce the files a new segment has opened (§3.3)."""
+        if segment.video_path:
+            self._event_center.submit(
+                VideoFileCreatedEvent.from_data(
+                    VideoFileCreatedEventData(
+                        room_id=self._room_id, path=segment.video_path
+                    )
+                )
+            )
+        if segment.danmaku_path:
+            self._event_center.submit(
+                DanmakuFileCreatedEvent.from_data(
+                    DanmakuFileCreatedEventData(
+                        room_id=self._room_id, path=segment.danmaku_path
+                    )
+                )
+            )
+        if segment.raw_danmaku_path:
+            self._event_center.submit(
+                RawDanmakuFileCreatedEvent.from_data(
+                    RawDanmakuFileCreatedEventData(
+                        room_id=self._room_id, path=segment.raw_danmaku_path
+                    )
+                )
+            )
+
+    def _on_cover_downloaded(self, path: str) -> None:
+        """Announce a saved cover image (§3.3)."""
+        self._event_center.submit(
+            CoverImageDownloadedEvent.from_data(
+                CoverImageDownloadedEventData(room_id=self._room_id, path=path)
+            )
+        )
 
     def _on_segment_completed(self, segment: CompletedSegment) -> None:
         """Announce a finished segment and queue it for post-processing (§3.3)."""
@@ -334,10 +379,12 @@ class RecordTask:
     async def _fetch_danmu_info(self) -> None:
         """Feed the danmaku client the broadcast hosts and auth token."""
         info = await self._live.api.get_danmu_info(self._room_id)
-        hosts = [
-            entry["host"] for entry in info.get("host_list", []) if entry.get("host")
-        ]
-        self._danmaku_client.set_danmu_info(hosts, info.get("token", ""))
+        host_list = info.get("host_list", [])
+        hosts = [entry["host"] for entry in host_list if entry.get("host")]
+        # The API states the port alongside the host; assuming 443 would ignore
+        # what it told us.
+        port = host_list[0].get("wss_port") if host_list else None
+        self._danmaku_client.set_danmu_info(hosts, info.get("token", ""), port=port)
 
     async def destroy(self) -> None:
         """Tear down all components for this task."""
@@ -346,6 +393,8 @@ class RecordTask:
         await self._danmaku_client.stop()
         await self._recorder.stop()
         self._recorder.set_segment_listener(None)
+        self._recorder.set_segment_started_listener(None)
+        self._recorder.set_cover_listener(None)
         await self._postprocessor.stop()
 
     # ── monitor control ──────────────────────────────────────────────────

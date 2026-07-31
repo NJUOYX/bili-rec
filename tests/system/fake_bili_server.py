@@ -8,10 +8,40 @@ FLV stream endpoint, and a WebSocket danmaku endpoint.
 from __future__ import annotations
 
 import asyncio
+import json
 import struct
+import time
 from typing import Any
 
-from aiohttp import web
+from aiohttp import WSMsgType, web
+
+# The broadcast protocol, mirrored from birec.bili.danmaku_client: a 16-byte
+# header of total length, header length, protocol version, operation, sequence.
+_HEADER = struct.Struct(">IHHiI")
+_OP_HEARTBEAT = 2
+_OP_HEARTBEAT_REPLY = 3
+_OP_NOTIFICATION = 5
+_OP_AUTH = 7
+_OP_AUTH_REPLY = 8
+_PROTO_NORMAL = 0
+
+
+def _encode_packet(op: int, body: bytes) -> bytes:
+    header = _HEADER.pack(len(body) + 16, 16, _PROTO_NORMAL, op, 1)
+    return header + body
+
+
+def _decode_packets(data: bytes) -> list[tuple[int, bytes]]:
+    """Split a frame into (operation, body) pairs."""
+    packets: list[tuple[int, bytes]] = []
+    offset = 0
+    while offset + 16 <= len(data):
+        total_len, header_len, _ver, op, _seq = _HEADER.unpack_from(data, offset)
+        if total_len < header_len or offset + total_len > len(data):
+            break
+        packets.append((op, data[offset + header_len : offset + total_len]))
+        offset += total_len
+    return packets
 
 
 def _make_flv_header() -> bytes:
@@ -78,6 +108,16 @@ def generate_flv_stream(num_frames: int = 10) -> bytes:
     return bytes(buf)
 
 
+def generate_flv_tag_pairs(num_frames: int, start_frame: int = 0) -> bytes:
+    """Generate tag pairs without a header, to append to a running stream."""
+    buf = bytearray()
+    for i in range(start_frame, start_frame + num_frames):
+        ts = i * 40
+        buf += _make_video_tag(ts)
+        buf += _make_audio_tag(ts)
+    return bytes(buf)
+
+
 class FakeBiliServer:
     """Controllable fake Bilibili live server."""
 
@@ -92,6 +132,22 @@ class FakeBiliServer:
         self.port: int = 0
         self.flv_data = generate_flv_stream(20)
         self.danmaku_ws_connections: list[web.WebSocketResponse] = []
+        # A real CDN hands the stream over in many small writes. Serving the
+        # whole blob in one go hides every failure mode that only shows up at a
+        # chunk boundary, so the size is deliberately small and configurable.
+        self.stream_chunk_size = 64
+        self.stream_chunk_delay = 0.01
+        # Frames appended after the initial blob, to keep the stream alive for
+        # as long as a test needs it.
+        self.stream_extra_frames = 400
+        self.stream_requests = 0
+        # HLS counters and the sliding window's position.
+        self.playlist_requests = 0
+        self.segment_requests = 0
+        self._hls_media_sequence = 0
+        # Auth payloads the broadcast endpoint received, so a test can check
+        # what the client claimed about itself.
+        self.auth_payloads: list[str] = []
 
     def _setup_routes(self) -> None:
         # Both API platforms are served: ``Live`` defaults to the web platform,
@@ -111,7 +167,10 @@ class FakeBiliServer:
             )
         self._app.router.add_get("/x/web-interface/nav", self._handle_nav)
         self._app.router.add_get("/stream.flv", self._handle_stream)
-        self._app.router.add_get("/ws/danmaku", self._handle_ws_danmaku)
+        self._app.router.add_get("/live.m3u8", self._handle_playlist)
+        self._app.router.add_get("/seg/{name}", self._handle_segment)
+        # The path the real broadcast servers use.
+        self._app.router.add_get("/sub", self._handle_ws_danmaku)
 
     @property
     def base_url(self) -> str:
@@ -159,7 +218,11 @@ class FakeBiliServer:
                     "online": 42,
                     "tags": "test",
                     "description": "测试直播间",
-                    "cover": f"{self.base_url}/cover.jpg",
+                    # Left empty on purpose. Cover URLs are forced to https by
+                    # the API layer, which this plaintext server cannot serve,
+                    # and a room without a cover is an ordinary case anyway.
+                    # The cover wiring is covered by the unit tests.
+                    "cover": "",
                 },
                 "anchor_info": {
                     "base_info": {
@@ -185,7 +248,6 @@ class FakeBiliServer:
             }
             return web.json_response(data)
 
-        stream_url = f"{self.base_url}/stream.flv"
         data = {
             "code": 0,
             "message": "ok",
@@ -206,18 +268,46 @@ class FakeBiliServer:
                                                     10000,
                                                     400,
                                                 ],
-                                                "base_url": stream_url,
+                                                # The real API splits the URL up:
+                                                # host + base_url + extra. Putting
+                                                # a whole URL in base_url makes the
+                                                # stream unreachable, which is how
+                                                # this fake used to be written.
+                                                "base_url": "/stream.flv",
                                                 "url_info": [
                                                     {
-                                                        "host": f"http://127.0.0.1:{self.port}",
-                                                        "extra": "/stream.flv",
+                                                        "host": self.base_url,
+                                                        "extra": "?token=fake",
                                                     }
                                                 ],
                                             }
                                         ],
                                     }
                                 ],
-                            }
+                            },
+                            {
+                                # The HLS variant the fmp4 stream format needs.
+                                "protocol_name": "http_hls",
+                                "format": [
+                                    {
+                                        "format_name": "fmp4",
+                                        "codec": [
+                                            {
+                                                "codec_name": "avc",
+                                                "current_qn": 10000,
+                                                "accept_qn": [10000, 400],
+                                                "base_url": "/live.m3u8",
+                                                "url_info": [
+                                                    {
+                                                        "host": self.base_url,
+                                                        "extra": "?token=fake",
+                                                    }
+                                                ],
+                                            }
+                                        ],
+                                    }
+                                ],
+                            },
                         ],
                     },
                 },
@@ -234,6 +324,8 @@ class FakeBiliServer:
                     {
                         "host": "127.0.0.1",
                         "port": self.port,
+                        # The client picks the TLS port; this server is
+                        # plaintext, so it advertises its own here.
                         "wss_port": self.port,
                         "ws_port": self.port,
                     }
@@ -260,34 +352,107 @@ class FakeBiliServer:
         return web.json_response(data)
 
     async def _handle_stream(self, request: web.Request) -> web.StreamResponse:
-        """Serve the FLV stream."""
+        """Serve the FLV stream in small chunks, the way a CDN does.
+
+        The chunking is the point: tags land split across writes, which is the
+        shape of the data the parser actually has to cope with in production.
+        """
+        self.stream_requests += 1
         resp = web.StreamResponse(
             status=200,
             headers={"Content-Type": "video/x-flv"},
         )
         await resp.prepare(request)
-        await resp.write(self.flv_data)
-        # Keep connection open briefly to simulate streaming
-        await asyncio.sleep(0.5)
-        await resp.write_eof()
+
+        payload = self.flv_data + generate_flv_tag_pairs(
+            self.stream_extra_frames, start_frame=20
+        )
+        try:
+            for start in range(0, len(payload), self.stream_chunk_size):
+                await resp.write(payload[start : start + self.stream_chunk_size])
+                await asyncio.sleep(self.stream_chunk_delay)
+            await resp.write_eof()
+        except (ConnectionResetError, asyncio.CancelledError):
+            # The recorder hung up, which is exactly what stopping looks like.
+            pass
         return resp
 
+    async def _handle_playlist(self, request: web.Request) -> web.Response:
+        """Serve a live HLS playlist that advances a sliding window each poll."""
+        self.playlist_requests += 1
+        first = self._hls_media_sequence
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:7",
+            "#EXT-X-TARGETDURATION:1",
+            f"#EXT-X-MEDIA-SEQUENCE:{first}",
+            '#EXT-X-MAP:URI="/seg/init.mp4"',
+        ]
+        for i in range(first, first + 3):
+            lines.append("#EXTINF:1.0,")
+            lines.append(f"/seg/{i}.m4s")
+        self._hls_media_sequence += 1
+        return web.Response(
+            text="\n".join(lines) + "\n",
+            content_type="application/vnd.apple.mpegurl",
+        )
+
+    async def _handle_segment(self, request: web.Request) -> web.Response:
+        """Serve an HLS segment: the init section, or a media segment."""
+        self.segment_requests += 1
+        name = request.match_info["name"]
+        body = b"\x00\x00\x00\x18ftypiso5" if name == "init.mp4" else b"\x00" * 512
+        return web.Response(body=body, content_type="video/mp4")
+
     async def _handle_ws_danmaku(self, request: web.Request) -> web.WebSocketResponse:
-        """WebSocket danmaku endpoint."""
+        """Broadcast endpoint speaking the real packet framing.
+
+        The client will not consider itself connected until it has been through
+        the handshake, so the fake has to answer the auth packet properly rather
+        than just accepting the socket.
+        """
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         self.danmaku_ws_connections.append(ws)
         try:
-            async for _msg in ws:
-                pass  # Ignore incoming messages
+            async for msg in ws:
+                if msg.type != WSMsgType.BINARY:
+                    continue
+                for op, body in _decode_packets(msg.data):
+                    if op == _OP_AUTH:
+                        self.auth_payloads.append(body.decode("utf-8", "replace"))
+                        await ws.send_bytes(
+                            _encode_packet(_OP_AUTH_REPLY, b'{"code":0}')
+                        )
+                    elif op == _OP_HEARTBEAT:
+                        await ws.send_bytes(
+                            _encode_packet(_OP_HEARTBEAT_REPLY, b"\x00\x00\x00\x01")
+                        )
         finally:
             self.danmaku_ws_connections.remove(ws)
         return ws
 
     async def send_danmaku_command(self, cmd: str, data: dict[str, Any]) -> None:
         """Broadcast a danmaku command to all connected WS clients."""
-        import json
-
-        msg = json.dumps({"cmd": cmd, **data})
+        payload = json.dumps({"cmd": cmd, **data}).encode("utf-8")
+        packet = _encode_packet(_OP_NOTIFICATION, payload)
         for ws in self.danmaku_ws_connections:
-            await ws.send_str(msg)
+            await ws.send_bytes(packet)
+
+    async def send_danmaku(self, text: str, *, uname: str = "Viewer") -> None:
+        """Broadcast one ordinary danmaku message.
+
+        The wire timestamp is in milliseconds and has to be roughly now: the
+        dumper writes each message's offset from the start of the recording, so
+        a fixed date in the past would land every line far outside the video.
+        """
+        await self.send_danmaku_command(
+            "DANMU_MSG",
+            {
+                "info": [
+                    [0, 1, 25, 0xFFFFFF, int(time.time() * 1000), 0, "", 0, 0, 0],
+                    text,
+                    [12345, uname, 0, 0, 0, 10000, 1, ""],
+                ]
+            },
+        )

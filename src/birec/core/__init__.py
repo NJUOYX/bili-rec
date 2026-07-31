@@ -12,6 +12,7 @@ from .models import (
     DanmakuMessage,
     Gift,
     GuardBuy,
+    StartedSegment,
     StreamEvent,
     SuperChat,
 )
@@ -28,6 +29,7 @@ from .stream_recorder import StreamRecorder
 
 __all__ = (
     "CompletedSegment",
+    "StartedSegment",
     "CoverDownloader",
     "CoverDownloaderListener",
     "Danmaku",

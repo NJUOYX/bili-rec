@@ -136,7 +136,15 @@ class FlvParser:
             raise FlvDataError(f"Unsupported tag type: {tag_header.tag_type}")
 
     def parse_flv_tag_header(self, data: bytes) -> FlvTagHeader:
-        """Parse 11-byte FLV tag header."""
+        """Parse 11-byte FLV tag header.
+
+        Bytes that do not decode to a known tag type are reported as an FLV
+        error like any other malformed data. The enum constructors raise a bare
+        ``ValueError``, which is not an ``FlvDataError`` and so escapes the
+        parser's handling entirely: a single unexpected byte then takes down the
+        whole stream fetch instead of being treated as the corrupted stream it
+        is.
+        """
         reader = StructReader(BytesIO(data))
 
         flag = reader.read_ui8()
@@ -144,7 +152,10 @@ class FlvParser:
         if filtered:
             raise FlvDataError("Unsupported Filtered FLV Tag", data)
 
-        tag_type = TagType(flag & 0b0001_1111)
+        try:
+            tag_type = TagType(flag & 0b0001_1111)
+        except ValueError as e:
+            raise FlvTagError(f"Unknown tag type: {flag & 0b0001_1111}", data) from e
         data_size = reader.read_ui24()
         timestamp = reader.read_ui24()
         timestamp_extended = reader.read_ui8()
@@ -179,13 +190,19 @@ class FlvParser:
         """Parse audio tag header."""
         reader = StructReader(BytesIO(data))
         flag = reader.read_ui8()
-        sound_format = SoundFormat(flag >> 4)
+        try:
+            sound_format = SoundFormat(flag >> 4)
+        except ValueError as e:
+            raise FlvTagError(f"Unknown sound format: {flag >> 4}", data) from e
         if sound_format != SoundFormat.AAC:
             raise FlvDataError(f"Unsupported sound format: {sound_format}", data)
-        sound_rate = SoundRate((flag >> 2) & 0b0000_0011)
-        sound_size = SoundSize((flag >> 1) & 0b0000_0001)
-        sound_type = SoundType(flag & 0b0000_0001)
-        aac_packet_type = AACPacketType(reader.read_ui8())
+        try:
+            sound_rate = SoundRate((flag >> 2) & 0b0000_0011)
+            sound_size = SoundSize((flag >> 1) & 0b0000_0001)
+            sound_type = SoundType(flag & 0b0000_0001)
+            aac_packet_type = AACPacketType(reader.read_ui8())
+        except ValueError as e:
+            raise FlvTagError("Malformed audio tag header", data) from e
         return AudioTagHeader(
             sound_format, sound_rate, sound_size, sound_type, aac_packet_type
         )
@@ -194,11 +211,17 @@ class FlvParser:
         """Parse video tag header."""
         reader = StructReader(BytesIO(data))
         flag = reader.read_ui8()
-        frame_type = FrameType(flag >> 4)
-        codec_id = CodecID(flag & 0b0000_1111)
+        try:
+            frame_type = FrameType(flag >> 4)
+            codec_id = CodecID(flag & 0b0000_1111)
+        except ValueError as e:
+            raise FlvTagError("Malformed video tag header", data) from e
         if codec_id != CodecID.AVC:
             raise FlvDataError(f"Unsupported video codec: {codec_id}", data)
-        avc_packet_type = AVCPacketType(reader.read_ui8())
+        try:
+            avc_packet_type = AVCPacketType(reader.read_ui8())
+        except ValueError as e:
+            raise FlvTagError("Unknown AVC packet type", data) from e
         composition_time = reader.read_ui24()
         return VideoTagHeader(frame_type, codec_id, avc_packet_type, composition_time)
 

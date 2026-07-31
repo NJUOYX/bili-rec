@@ -13,6 +13,7 @@ __all__ = (
     "GuardBuy",
     "DanmakuMessage",
     "StreamEvent",
+    "StartedSegment",
     "CompletedSegment",
 )
 
@@ -164,6 +165,20 @@ class StreamEvent:
     room_id: int
     timestamp: datetime = field(default_factory=lambda: datetime.now())
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class StartedSegment:
+    """The files one recording segment has just opened on disk.
+
+    Reported as the segment starts so that "recording began" can be announced
+    with the paths it will be writing to, which is what a user watching the
+    dashboard or waiting on a notification is being told about.
+    """
+
+    video_path: str
+    danmaku_path: str = ""
+    raw_danmaku_path: str = ""
 
 
 @dataclass(frozen=True)

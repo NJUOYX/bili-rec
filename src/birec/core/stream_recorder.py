@@ -30,7 +30,7 @@ from .cover_downloader import CoverDownloader
 from .danmaku_dumper import DanmakuDumper
 from .danmaku_receiver import DanmakuReceiver
 from .metadata_provider import MetadataProvider
-from .models import CompletedSegment
+from .models import CompletedSegment, StartedSegment
 from .operators.stream_statistics import StreamStatistics
 from .path_provider import PathProvider
 from .raw_danmaku_dumper import RawDanmakuDumper
@@ -223,10 +223,10 @@ class StreamRecorder:
         """Set up cover downloader."""
         self._cover_downloader = downloader
 
-    async def start_recording(self) -> str:
+    async def start_recording(self) -> StartedSegment:
         """Start recording a new segment.
 
-        Returns the video file path.
+        Returns the files the segment has opened.
         """
         video_path = self._path_provider.video_path()
         self._path_provider.make_dirs(video_path)
@@ -268,7 +268,11 @@ class StreamRecorder:
         self._is_recording = True
 
         logger.info("Recording started: %s", video_path)
-        return video_path
+        return StartedSegment(
+            video_path=video_path,
+            danmaku_path=self.current_danmaku_path,
+            raw_danmaku_path=self.current_raw_danmaku_path,
+        )
 
     async def stop_recording(self) -> CompletedSegment | None:
         """Stop the current recording segment.
@@ -314,11 +318,14 @@ class StreamRecorder:
         )
         return segment
 
-    async def download_cover(self, cover_url: str) -> None:
-        """Download cover image if cover downloader is set up."""
-        if self._cover_downloader and self._current_video_path:
-            cover_path = self._path_provider.cover_path(self._current_video_path)
-            await self._cover_downloader.download(cover_url, cover_path)
+    async def download_cover(self, cover_url: str) -> str:
+        """Download the cover image, returning its path when one was saved."""
+        if not (self._cover_downloader and self._current_video_path):
+            return ""
+        cover_path = self._path_provider.cover_path(self._current_video_path)
+        if await self._cover_downloader.download(cover_url, cover_path):
+            return cover_path
+        return ""
 
     def create_flv_pipeline(
         self,

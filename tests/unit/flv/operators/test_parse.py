@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import pytest
 import reactivex
 from reactivex.subject import Subject
 from reactivex.testing import TestScheduler
 
 from birec.flv import FlvHeader, FlvTag, StreamBuffer
 from birec.flv.common import is_avc_end_sequence_tag
+from birec.flv.exceptions import (
+    FlvDataError,
+    FlvStreamCorruptedError,
+    FlvTagError,
+)
+from birec.flv.format import FlvParser
 from birec.flv.operators import parse
 from birec.flv.operators.typing import FLVStreamItem
 from birec.flv.struct_io import RandomIO
@@ -221,3 +228,63 @@ class TestParseResumable:
         end_tags = [item for item in results if is_avc_end_sequence_tag(item)]
         assert len(end_tags) == 1
         assert len(results) == before_completion + 1
+
+    def test_a_second_flv_header_mid_stream_is_a_stream_error(self) -> None:
+        """Regression: junk in the stream must stay an FLV error, not escape.
+
+        A reconnect can put a fresh ``FLV`` magic where a tag header is
+        expected. ``0x46`` masks down to tag type 6, which no enum accepts, and
+        the constructor raises a bare ``ValueError`` — not an ``FlvDataError``,
+        so the parser's own handling never saw it. It escaped the FLV layer
+        entirely and reached the download loop's catch-all, taking the whole
+        fetch down instead of being handled as the corrupted stream it is.
+        """
+        # Enough bytes after the magic for a whole tag header to be read, so the
+        # parser commits to it rather than waiting for more data.
+        junk = b"FLV\x01\x05\x00\x00\x00\x09" + b"\x00" * 20
+        data = make_flv_bytes(tags=[make_video_tag()]) + junk
+        buffer = StreamBuffer()
+        source: Subject[RandomIO] = Subject()
+
+        results: list[FLVStreamItem] = []
+        errors: list[Exception] = []
+        source.pipe(parse(resumable=True)).subscribe(
+            on_next=results.append,
+            on_error=errors.append,
+        )
+
+        buffer.append(data)
+        source.on_next(buffer)
+
+        assert len(errors) == 1
+        assert isinstance(errors[0], FlvStreamCorruptedError)
+        # The tags before the junk still came through.
+        assert any(isinstance(item, FlvTag) for item in results)
+
+
+class TestTagHeaderParsing:
+    """Malformed bytes must be reported as FLV errors, whichever field they hit."""
+
+    def test_an_unknown_tag_type_is_an_flv_error(self) -> None:
+        parser = FlvParser(BytesIO(b""))
+        with pytest.raises(FlvTagError):
+            parser.parse_flv_tag_header(b"\x06" + b"\x00" * 10)
+
+    def test_an_unknown_sound_format_is_an_flv_error(self) -> None:
+        parser = FlvParser(BytesIO(b""))
+        # High nibble 0xD is not a sound format any decoder knows.
+        with pytest.raises(FlvTagError):
+            parser.parse_audio_tag_header(b"\xd0\x00")
+
+    def test_an_unknown_frame_type_is_an_flv_error(self) -> None:
+        parser = FlvParser(BytesIO(b""))
+        with pytest.raises(FlvTagError):
+            parser.parse_video_tag_header(b"\xf7\x00\x00\x00\x00")
+
+    def test_an_unsupported_codec_is_still_reported_as_data(self) -> None:
+        """A known-but-unsupported value keeps its existing, distinct error."""
+        parser = FlvParser(BytesIO(b""))
+        with pytest.raises(FlvDataError) as exc_info:
+            # Frame type 1 (keyframe), codec 2 (Sorenson H.263): valid, unsupported.
+            parser.parse_video_tag_header(b"\x12\x00\x00\x00\x00")
+        assert "Unsupported video codec" in str(exc_info.value)
