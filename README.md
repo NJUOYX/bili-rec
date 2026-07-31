@@ -19,8 +19,8 @@
 |------|------|
 | Python | ≥ 3.12 |
 | ffmpeg / ffprobe | 系统 PATH 可用（Remux/元数据注入需要） |
-| Node.js（仅前端开发） | ≥ 20.19 |
-| pnpm（仅前端开发） | ≥ 9 |
+| Node.js（前端开发 / 源码构建界面） | ≥ 20.19 |
+| pnpm（前端开发 / 源码构建界面） | ≥ 9 |
 
 弹幕转 ASS 由 [dmconvert](https://pypi.org/project/dmconvert/) 完成。它是纯 Python 包并已声明为项目依赖，`uv sync` / `pip install` / Docker 构建都会自动装上，无需单独安装外部二进制。
 
@@ -115,6 +115,12 @@ birec --key-file server.key --cert-file server.crt
 
 ### Web 管理界面
 
+> **源码安装（`uv sync` / `pip install .`）默认没有界面。** 树里不含编译产物，
+> 后端找不到 `index.html` 就静默以纯 API 模式运行——`uv run birec` 能正常起来，
+> 但访问 `/` 或 `/dashboard` 会返回 `{"code": 404, "message": "Not Found"}`。
+> 这不是故障：要界面就按 [自行构建前端](#自行构建前端) 编译一份，或直接用
+> Release wheel / Docker 镜像（两者都已内置界面）。
+
 使用发布的 wheel 或 Docker 镜像时，服务启动后浏览器访问
 `http://<host>:<port>` 即可进入 Web 管理界面，支持：
 
@@ -129,7 +135,8 @@ birec --key-file server.key --cert-file server.crt
 
 #### 自行构建前端（源码安装）
 
-源码安装的树里没有编译好的界面。自己构建一份并放到应用会去找的位置：
+源码安装的树里没有编译好的界面。自己构建一份并放到应用会去找的位置（需要
+Node ≥ 20.19 与 pnpm ≥ 9；不想装 Node 就用 Release wheel 或 Docker 镜像）：
 
 ```bash
 cd frontend
@@ -138,7 +145,8 @@ pnpm build
 cd ..
 
 # 应用默认在 birec/web/static 下寻找界面
-cp -r frontend/dist src/birec/web/static
+mkdir -p src/birec/web/static
+cp -r frontend/dist/. src/birec/web/static/
 ```
 
 也可以把产物放在任意目录，用环境变量指过去：
@@ -146,6 +154,9 @@ cp -r frontend/dist src/birec/web/static
 ```bash
 export BIREC_STATIC_DIR=/path/to/dist
 ```
+
+界面是在服务启动时挂载的，所以放好产物后要重启 `birec` 才生效。挂载成功的标志是
+`GET /` 返回 HTML 而不是那段 404 JSON。
 
 前端开发时不必这样做——`pnpm dev` 起的开发服务器会把 API 请求代理到后端。
 
