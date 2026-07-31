@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from ..bili.exceptions import NoAlternativeStreamAvailable
 from ..bili.live import Live
 from .operators.connection_error_handler import ConnectionErrorHandler
 from .operators.stream_fetcher import StreamFetcher
@@ -92,11 +93,40 @@ class FLVStreamRecorderImpl:
         """Signal the download loop to stop."""
         self._running = False
 
+    async def _resolve_url(self, *, away_from_last_host: bool) -> str:
+        """Resolve a stream URL, optionally away from the host that just failed.
+
+        The API hands out several CDNs and any one of them can be having a bad
+        day. Falls back to the ordinary resolution when there is no other host
+        on offer, because one flaky CDN is still better than no recording.
+        """
+        params = self._stream_params
+        if away_from_last_host:
+            try:
+                url = await self._url_resolver.resolve_alternative(
+                    stream_format=params.stream_format,
+                    stream_codec=params.stream_codec,
+                    quality_number=params.quality_number,
+                )
+            except NoAlternativeStreamAvailable:
+                logger.info("No other CDN on offer; retrying the same one")
+            else:
+                logger.info("Switching to another CDN after a failed connection")
+                return url
+        return await self._url_resolver.resolve(
+            stream_format=params.stream_format,
+            stream_codec=params.stream_codec,
+            quality_number=params.quality_number,
+        )
+
     async def _download_loop(self) -> None:
         """Resolve URL, fetch, and feed data in a retry loop."""
         sr = self._stream_recorder
         params = self._stream_params
         first_attempt = True
+        # Set when a connection failed without delivering anything, which is the
+        # signal that the host itself may be the problem.
+        switch_cdn = False
 
         while self._running:
             # Anything the previous connection left half-written belongs to a
@@ -107,16 +137,13 @@ class FLVStreamRecorderImpl:
 
             # 1. Resolve stream URL
             try:
-                url = await self._url_resolver.resolve(
-                    stream_format=params.stream_format,
-                    stream_codec=params.stream_codec,
-                    quality_number=params.quality_number,
-                )
+                url = await self._resolve_url(away_from_last_host=switch_cdn)
             except Exception as exc:
                 logger.error("Failed to resolve stream URL: %s", exc)
                 if not await self._handle_error():
                     break
                 continue
+            switch_cdn = False
 
             # Update stream URL/host tracking on StreamRecorder
             parsed = urlparse(url)
@@ -151,6 +178,10 @@ class FLVStreamRecorderImpl:
                 logger.warning("Stream connection lost: %s", exc)
                 if not self._running:
                     break
+                # A host that dropped us without sending anything is worth
+                # stepping away from; one that was working until now most likely
+                # just hiccuped, and its URL is the one we want back.
+                switch_cdn = not delivered
                 if not await self._handle_error():
                     break
                 continue
@@ -172,12 +203,15 @@ class FLVStreamRecorderImpl:
                 # healthy, so the retry budget starts over.
                 self._error_handler.reset()
                 await asyncio.sleep(_STREAM_END_DELAY)
-            elif not await self._handle_error():
+            else:
                 # One that carried nothing is not evidence of anything. Resetting
                 # the budget on those makes an endpoint answering 200 with an
                 # empty body retryable forever, with the task claiming to record
-                # a file that never grows past its header.
-                break
+                # a file that never grows past its header. Another CDN may well
+                # have the stream this one does not.
+                switch_cdn = True
+                if not await self._handle_error():
+                    break
 
     async def _handle_error(self) -> bool:
         """Handle a connection error. Returns True if should retry."""

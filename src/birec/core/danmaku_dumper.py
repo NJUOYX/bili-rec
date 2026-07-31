@@ -8,6 +8,7 @@ import io
 import logging
 import os
 import time
+from collections.abc import Callable
 
 from ..event.event_emitter import EventEmitter, EventListener
 from ..utils.mixins import AsyncStoppableMixin
@@ -38,11 +39,18 @@ class DanmakuDumper(AsyncStoppableMixin, EventEmitter[DanmakuDumperListener]):
         output_path: str,
         *,
         flush_interval: float = 5.0,
+        on_message: Callable[[], None] | None = None,
     ) -> None:
+        """Dump the receiver's messages into an XML file for this segment.
+
+        ``on_message`` is called once per message taken in, which is how the
+        statistics the dashboard shows learn that danmaku are arriving.
+        """
         super().__init__()
         self._receiver = receiver
         self._output_path = output_path
         self._flush_interval = flush_interval
+        self._on_message = on_message
         self._messages: list[DanmakuMessage] = []
         self._start_time: float = 0.0
         self._written_count: int = 0
@@ -78,7 +86,7 @@ class DanmakuDumper(AsyncStoppableMixin, EventEmitter[DanmakuDumperListener]):
         # messages behind that belong in this file.
         for msg in self._receiver.drain():
             self._messages.append(msg)
-            self._written_count += 1
+            self._count()
         self.finalize()
 
     async def _dump_loop(self) -> None:
@@ -87,10 +95,16 @@ class DanmakuDumper(AsyncStoppableMixin, EventEmitter[DanmakuDumperListener]):
             msg = await self._receiver.get(timeout=self._flush_interval)
             if msg is not None:
                 self._messages.append(msg)
-                self._written_count += 1
+                self._count()
 
             if self._messages:
                 self._flush_messages()
+
+    def _count(self) -> None:
+        """Record one more message taken in, and tell whoever is watching."""
+        self._written_count += 1
+        if self._on_message is not None:
+            self._on_message()
 
     def _write_header(self) -> None:
         """Write XML file header."""

@@ -40,3 +40,6 @@ htmlcov/
 
 # Local tooling / sandbox temp (not committed)
 .tmp/
+
+# Frontend build copied in by the release pipeline, never committed
+src/birec/web/static/

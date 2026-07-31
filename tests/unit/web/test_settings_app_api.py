@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from birec import __version__
 from birec.application import Application
 from birec.web import create_app
 
@@ -274,6 +275,20 @@ class TestAppEndpoints:
         assert body["data"]["name"] == "bili-rec"
         assert "pid" in body["data"]
 
+    async def test_the_reported_version_is_the_packaged_one(
+        self, client: AsyncClient
+    ) -> None:
+        """Regression: the version was written out by hand in three places.
+
+        ``birec --version`` read ``__version__`` while the API and the OpenAPI
+        document each carried their own literal, so they disagreed the moment
+        either was bumped — and the update check compared PyPI against a
+        hardcoded string that would go stale on the first release.
+        """
+        body = (await client.get("/api/v1/app/info")).json()
+
+        assert body["data"]["version"] == __version__
+
     async def test_restart_app(self, client: AsyncClient) -> None:
         with patch("os.kill") as mock_kill:
             resp = await client.post("/api/v1/app/restart")
@@ -479,6 +494,8 @@ class TestUpdateVersion:
         body = resp.json()
         assert body["code"] == 0
         assert body["data"]["version"] == "1.2.3"
+        # What the update check compares against has to be what is installed.
+        assert body["data"]["current"] == __version__
 
     async def test_get_latest_version_not_found(self, client: AsyncClient) -> None:
         with patch("birec.update.PypiApi") as MockPypi:

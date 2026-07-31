@@ -26,6 +26,12 @@
 
 ## 安装
 
+> **关于 Web 界面**：界面是一份需要编译的 React 应用，不随源码入库。
+> 从 [Releases](https://github.com/OuYax/bili-rec/releases) 下载的 wheel 和
+> Docker 镜像都已内置界面；直接从**源码**安装（下面的方式一、二）则不含界面，
+> 服务只提供 REST API，根路径会返回 404。源码安装若需要界面，见
+> [自行构建前端](#自行构建前端)。
+
 ### 方式一：使用 uv（推荐）
 
 ```bash
@@ -109,7 +115,8 @@ birec --key-file server.key --cert-file server.crt
 
 ### Web 管理界面
 
-服务启动后，浏览器访问 `http://<host>:<port>` 即可进入 Web 管理界面，支持：
+使用发布的 wheel 或 Docker 镜像时，服务启动后浏览器访问
+`http://<host>:<port>` 即可进入 Web 管理界面，支持：
 
 - 添加/删除录制任务（直播间）
 - 启动/停止监控与录制
@@ -117,6 +124,30 @@ birec --key-file server.key --cert-file server.crt
 - 修改全局/任务级设置
 - 扫码登录 Bilibili 账号
 - 实时 WebSocket 事件推送
+
+<a id="自行构建前端"></a>
+
+#### 自行构建前端（源码安装）
+
+源码安装的树里没有编译好的界面。自己构建一份并放到应用会去找的位置：
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm build
+cd ..
+
+# 应用默认在 birec/web/static 下寻找界面
+cp -r frontend/dist src/birec/web/static
+```
+
+也可以把产物放在任意目录，用环境变量指过去：
+
+```bash
+export BIREC_STATIC_DIR=/path/to/dist
+```
+
+前端开发时不必这样做——`pnpm dev` 起的开发服务器会把 API 请求代理到后端。
 
 ### REST API
 
@@ -256,6 +287,22 @@ src/birec/
 
 frontend/          # React SPA 前端（Ant Design + TanStack Query）
 ```
+
+## 已知限制
+
+当前版本以 FLV 录制为主线，以下几处尚未接通或有前提，会在后续版本补齐：
+
+| 限制 | 表现 | 影响 |
+|---|---|---|
+| **fMP4/HLS 录制未接通** | `stream_format` 设为 `fmp4` 时设置会被接受并回读，但实际仍以 FLV 录制 | 录制正常，只是格式不是所选的那个 |
+| **广播心跳无应答校验** | 服务端停止响应心跳时，客户端不会察觉并重连 | 极少数半开连接下该房间会静默收不到弹幕，重启任务可恢复 |
+| **更新检查依赖 PyPI** | `/api/v1/update/version/latest` 去 PyPI 查 `birec`；本项目目前只发 GitHub Release 与 GHCR 镜像，未发布到 PyPI，因此该接口会返回 404 | 不影响录制；请到 [Releases](https://github.com/OuYax/bili-rec/releases) 查看新版本 |
+
+磁盘空间监控默认开启（低于阈值时告警）；**自动回收旧录像默认关闭**，需在设置里
+打开 `space.recycle_records` —— 它会删掉超过 TTL 的录像文件。
+
+另有两处设计上有意不做（见 `blrec后端功能清单.md`）：通知系统与 Webhook、
+按大小/时长自动切分文件。一场直播输出单个文件。
 
 ## 许可证
 

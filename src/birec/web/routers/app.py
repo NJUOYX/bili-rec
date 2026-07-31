@@ -11,6 +11,7 @@ from typing import Any
 import aiohttp
 from fastapi import APIRouter, Request
 
+from ... import __version__
 from ..models import ResponseMessage
 
 app_router = APIRouter(prefix="/api/v1", tags=["app"])
@@ -47,7 +48,7 @@ async def get_app_info() -> dict[str, Any]:
     """Get application info."""
     data = {
         "name": "bili-rec",
-        "version": "0.1.0",
+        "version": __version__,
         "python": sys.version.split()[0],
         "pid": os.getpid(),
     }
@@ -190,4 +191,4 @@ async def get_latest_version(request: Request) -> dict[str, Any]:
     if version is None:
         return ResponseMessage(code=404, message="Project not found on PyPI").to_dict()
 
-    return ResponseMessage(data={"version": version, "current": "0.1.0"}).to_dict()
+    return ResponseMessage(data={"version": version, "current": __version__}).to_dict()

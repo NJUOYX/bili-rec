@@ -27,6 +27,7 @@ from birec.postprocess.postprocessor import Postprocessor
 from birec.setting.env import EnvSettings
 from birec.setting.models import Settings, TaskSettings
 from birec.setting.setting_manager import SettingsManager
+from birec.space import SpaceInfo, SpaceMonitor, SpaceReclaimer
 from birec.task import RecordTask, RecordTaskManager
 from birec.web import create_app
 
@@ -76,15 +77,58 @@ class Application:
         self._settings_manager = SettingsManager.load_with_env(env)
         self._session: aiohttp.ClientSession | None = None
         self._bili_api: AppApi | None = None
+        space = self._settings_manager.settings.space
+        self._space_reclaimer = SpaceReclaimer([output_dir])
+        self._space_monitor = SpaceMonitor(
+            output_dir,
+            threshold=space.space_threshold,
+            check_interval=space.check_interval,
+            on_space_low=self._on_space_low,
+        )
         self._task_manager = RecordTaskManager(
             self._create_task,
             on_task_added=self._register_task_settings,
             on_task_removed=self._forget_task_settings,
+            space_monitor=self._space_monitor,
+            space_reclaimer=self._space_reclaimer,
         )
+
+    def _on_space_low(self, info: SpaceInfo) -> None:
+        """React to the disk filling up under the recordings directory.
+
+        The warning always goes out, because a recording that runs out of room
+        fails in a way the user can do nothing about after the fact. Deleting
+        their recordings to make room is another matter, so that only happens
+        when they asked for it.
+        """
+        logger.warning(
+            "Low disk space at %s: %.1f GiB free of %.1f GiB",
+            info.path,
+            info.free / 1024**3,
+            info.total / 1024**3,
+        )
+        if not self._settings_manager.settings.space.recycle_records:
+            return
+        target = self._settings_manager.settings.space.space_threshold * 2
+        reclaimed = self._space_reclaimer.reclaim(target)
+        if reclaimed:
+            logger.info("Reclaimed %.1f GiB of old recordings", reclaimed / 1024**3)
+        else:
+            logger.warning(
+                "Nothing was old enough to reclaim; the disk is still nearly full"
+            )
 
     @property
     def is_started(self) -> bool:
         return self._started
+
+    @property
+    def space_monitor(self) -> SpaceMonitor:
+        return self._space_monitor
+
+    @property
+    def space_reclaimer(self) -> SpaceReclaimer:
+        return self._space_reclaimer
 
     @property
     def settings_manager(self) -> SettingsManager:

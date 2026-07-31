@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 from loguru import logger
@@ -323,22 +324,26 @@ class Live:
             for info in url_info_list:
                 host = info.get("host", "")
                 extra = info.get("extra", "")
-                if host and base_url and exclude_host not in host:
-                    alternatives.append(host + base_url + extra)
+                # Compared as a hostname rather than a substring: excluding
+                # "cdn.example" must not also exclude "other-cdn.example".
+                if not (host and base_url):
+                    continue
+                if exclude_host and urlparse(host).hostname == exclude_host:
+                    continue
+                alternatives.append(host + base_url + extra)
 
         if not alternatives:
             raise NoAlternativeStreamAvailable(
                 f"No alternative stream for room {self._room_id}"
             )
 
-        # Sort by CDN priority
-        sorted_urls = self.sort_stream_urls(
-            [
-                {"host": u.split("/")[0] + "//" + u.split("/")[2], "extra": ""}
-                for u in alternatives
-            ]
+        # Prefer the better CDNs, but hand back the whole address. The priority
+        # is a property of the host; what gets fetched is host + path + query,
+        # and rebuilding a host-only URL from the pieces loses the stream.
+        alternatives.sort(
+            key=lambda url: self._cdn_priority(urlparse(url).hostname or "")
         )
-        return sorted_urls[0] if sorted_urls else alternatives[0]
+        return alternatives[0]
 
     # --- Room State Detection ---
 

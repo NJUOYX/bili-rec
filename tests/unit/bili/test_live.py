@@ -267,8 +267,70 @@ class TestAlternativeStream:
         )
         with patch.object(live.api, "get_room_play_infos", new_callable=AsyncMock) as m:
             m.return_value = [resp]
-            url = await live.select_alternative(exclude_host="cn-gotcha01")
+            url = await live.select_alternative(
+                exclude_host="cn-gotcha01.bilivideo.com"
+            )
         assert "backup" in url
+
+    async def test_the_alternative_keeps_its_path_and_query(self) -> None:
+        """Regression: the returned address was reduced to scheme and host.
+
+        The CDN priority was applied by rebuilding a URL out of ``split("/")``
+        pieces, which threw the path and the query away — so the "alternative"
+        handed back was a bare host that streams nothing. Nothing called this
+        method, so nobody found out.
+        """
+        live = _make_live()
+        resp = _play_info_response()
+        codec = resp["playurl_info"]["playurl"]["stream"][0]["format"][0]["codec"][0]
+        codec["base_url"] = "/live/stream.flv"
+        codec["url_info"] = [
+            {"host": "https://backup.bilivideo.com", "extra": "?token=abc"}
+        ]
+        with patch.object(live.api, "get_room_play_infos", new_callable=AsyncMock) as m:
+            m.return_value = [resp]
+            url = await live.select_alternative(
+                exclude_host="cn-gotcha01.bilivideo.com"
+            )
+
+        assert url == "https://backup.bilivideo.com/live/stream.flv?token=abc"
+
+    async def test_a_similarly_named_host_is_not_excluded(self) -> None:
+        """Regression: the exclusion was a substring test, not a host test.
+
+        Excluding ``cdn.example`` also excluded ``other-cdn.example``, which
+        could rule out every remaining CDN and abandon a recording that had a
+        working host available.
+        """
+        live = _make_live()
+        resp = _play_info_response()
+        codec = resp["playurl_info"]["playurl"]["stream"][0]["format"][0]["codec"][0]
+        codec["url_info"] = [
+            {"host": "https://cdn.example.com", "extra": ""},
+            {"host": "https://other-cdn.example.com", "extra": ""},
+        ]
+        with patch.object(live.api, "get_room_play_infos", new_callable=AsyncMock) as m:
+            m.return_value = [resp]
+            url = await live.select_alternative(exclude_host="cdn.example.com")
+
+        assert "other-cdn.example.com" in url
+
+    async def test_the_best_cdn_among_the_alternatives_wins(self) -> None:
+        """The priority order still applies to whatever is left to choose from."""
+        live = _make_live()
+        resp = _play_info_response()
+        codec = resp["playurl_info"]["playurl"]["stream"][0]["format"][0]["codec"][0]
+        codec["url_info"] = [
+            {"host": "https://mcdn.bilivideo.com", "extra": ""},
+            {"host": "https://gotcha02.bilivideo.com", "extra": ""},
+        ]
+        with patch.object(live.api, "get_room_play_infos", new_callable=AsyncMock) as m:
+            m.return_value = [resp]
+            url = await live.select_alternative(
+                exclude_host="cn-gotcha01.bilivideo.com"
+            )
+
+        assert "gotcha02" in url
 
     async def test_no_alternative_available(self) -> None:
         live = _make_live()
@@ -276,7 +338,7 @@ class TestAlternativeStream:
         with patch.object(live.api, "get_room_play_infos", new_callable=AsyncMock) as m:
             m.return_value = [resp]
             with pytest.raises(NoAlternativeStreamAvailable):
-                await live.select_alternative(exclude_host="cn-gotcha01")
+                await live.select_alternative(exclude_host="cn-gotcha01.bilivideo.com")
 
 
 class TestRoomState:

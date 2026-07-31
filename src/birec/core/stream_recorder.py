@@ -239,6 +239,9 @@ class StreamRecorder:
             self._danmaku_dumper = DanmakuDumper(
                 self._danmaku_receiver,
                 danmaku_path,
+                # The counter the dashboard shows only moves if something tells
+                # it that danmaku are arriving.
+                on_message=self._statistics.update_danmu,
             )
             # Started here, not at construction: the dumper anchors its
             # timeline to the recording start and writes into this segment.

@@ -108,10 +108,9 @@ class TestRecordingReachesDisk:
     ) -> None:
         """Regression: starting to record must reach the event bus.
 
-        The event class existed and the notification module listed it as
-        something a user can subscribe to, but nothing ever submitted it, so
-        "recording started" never arrived. Same shape as #10: defined, wired to
-        nothing.
+        The event class existed and the WebSocket stream offered it to
+        subscribers, but nothing ever submitted it, so "recording started" never
+        arrived. Same shape as #10: defined, wired to nothing.
         """
         await add_task(client)
         await begin_live(client, fake_server)
