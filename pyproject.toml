@@ -46,12 +46,15 @@ dev = [
 [tool.hatch.version]
 path = "src/birec/__init__.py"
 
+# Declared for every target, not just the wheel. ``uv build`` builds the sdist
+# first and then the wheel *from that sdist*, so an artifact the sdist drops is
+# missing from the wheel too — which is exactly how a release pipeline that
+# looked correct produced a wheel with no UI in it.
+[tool.hatch.build]
+artifacts = ["src/birec/web/static/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/birec"]
-# The frontend build is not in version control, so hatchling would skip it.
-# Naming it as an artifact makes the wheel carry whatever the release pipeline
-# put there; a tree without a build simply ships without a UI (see README).
-artifacts = ["src/birec/web/static/**"]
 
 [tool.ruff]
 line-length = 88
