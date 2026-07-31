@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .. import __version__
 from .middleware import BaseHrefMiddleware, RouteRedirectMiddleware
 from .models import ResponseMessage
 from .routers import app_router, settings_router, tasks_router, ws_router
@@ -46,7 +47,7 @@ def create_app(
     app = FastAPI(
         title="bili-rec",
         description="Bilibili live-stream recorder API",
-        version="0.1.0",
+        version=__version__,
     )
 
     # CORS middleware
