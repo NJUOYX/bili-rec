@@ -105,3 +105,26 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
+
+# ── Mutation testing (方案 3 of #19) ─────────────────────────────────────────
+# Scoped deliberately: mutation testing runs the covering tests once per mutant,
+# so it is aimed at the modules where the escaped bugs actually lived rather
+# than at the whole tree.
+[tool.mutmut]
+# The whole package is copied so imports resolve inside mutants/, while
+# only_mutate keeps the actual mutation surface small.
+source_paths = ["src/birec"]
+only_mutate = [
+    # The modules the escaped bugs actually lived in: status reporting, the
+    # download loop, the live-state machine, and FLV parsing.
+    "src/birec/core/statistics.py",
+    "src/birec/core/recorder.py",
+    "src/birec/core/flv_stream_recorder_impl.py",
+    "src/birec/bili/live_monitor.py",
+    "src/birec/flv/operators/parse.py",
+    "src/birec/task/__init__.py",
+]
+pytest_add_cli_args_test_selection = ["tests/unit/"]
+# mutmut runs pytest with plugin autoloading off, which would drop
+# pytest-asyncio and leave every async test unrun (and every mutant "surviving").
+pytest_add_cli_args = ["-p", "pytest_asyncio"]
