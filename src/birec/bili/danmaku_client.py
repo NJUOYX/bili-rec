@@ -77,7 +77,7 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
         self._hosts: list[str] = []
         self._token: str = ""
         self._host_index: int = 0
-        self._port: int | None = None
+        self._ports: list[int] = []
 
         # Connection state
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -137,18 +137,19 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
     # --- Danmaku server info ---
 
     def set_danmu_info(
-        self, hosts: list[str], token: str, *, port: int | None = None
+        self, hosts: list[str], token: str, *, ports: list[int] | None = None
     ) -> None:
         """Set danmaku server hosts and auth token from get_danmu_info API.
 
-        ``port`` comes from the same response. It is almost always 443, but the
-        API is entitled to hand out another one and dropping it on the floor
-        leaves us connecting to the wrong place.
+        ``ports`` pairs up with ``hosts``: each broadcast server states its own,
+        almost always 443 but not necessarily. They have to stay paired, because
+        rotating to the next host while keeping the previous host's port is a
+        different address than the one advertised, and usually a dead one.
         """
         self._hosts = hosts
         self._token = token
         self._host_index = 0
-        self._port = port
+        self._ports = list(ports) if ports else []
 
     # --- AsyncStoppableMixin ---
 
@@ -213,13 +214,14 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
         finally:
             await self._close_connection()
 
-    def _build_url(self, host: str) -> str:
-        """Build the broadcast WebSocket URL for a host from get_danmu_info.
+    def _build_url(self, index: int) -> str:
+        """Build the broadcast WebSocket URL for the host at ``index``.
 
-        The scheme follows the port: 443 is the TLS endpoint the API normally
-        advertises, anything else is plaintext.
+        The scheme follows that host's own port: 443 is the TLS endpoint the API
+        normally advertises, anything else is plaintext.
         """
-        port = self._port
+        host = self._hosts[index]
+        port = self._ports[index] if index < len(self._ports) else None
         if port is None or port == 443:
             return f"wss://{host}/sub"
         return f"ws://{host}:{port}/sub"
@@ -230,7 +232,7 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
             raise RuntimeError("No danmaku hosts configured")
 
         host = self._hosts[self._host_index]
-        url = self._build_url(host)
+        url = self._build_url(self._host_index)
 
         headers: dict[str, str] = {}
         if self._user_agent:

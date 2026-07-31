@@ -379,12 +379,13 @@ class RecordTask:
     async def _fetch_danmu_info(self) -> None:
         """Feed the danmaku client the broadcast hosts and auth token."""
         info = await self._live.api.get_danmu_info(self._room_id)
-        host_list = info.get("host_list", [])
-        hosts = [entry["host"] for entry in host_list if entry.get("host")]
-        # The API states the port alongside the host; assuming 443 would ignore
-        # what it told us.
-        port = host_list[0].get("wss_port") if host_list else None
-        self._danmaku_client.set_danmu_info(hosts, info.get("token", ""), port=port)
+        usable = [entry for entry in info.get("host_list", []) if entry.get("host")]
+        hosts = [entry["host"] for entry in usable]
+        # Each host states its own port, and the two lists have to stay aligned:
+        # rotating to a later host with the first one's port aims at an address
+        # nobody advertised.
+        ports = [entry.get("wss_port") or 443 for entry in usable]
+        self._danmaku_client.set_danmu_info(hosts, info.get("token", ""), ports=ports)
 
     async def destroy(self) -> None:
         """Tear down all components for this task."""

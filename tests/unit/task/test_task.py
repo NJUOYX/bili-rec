@@ -234,7 +234,7 @@ class TestRecordTaskLifecycle:
         task, comps = _make_task()
         await task.setup()
         comps["danmaku_client"].set_danmu_info.assert_called_once_with(
-            ["broadcastlv.chat.bilibili.com"], "danmu-token", port=443
+            ["broadcastlv.chat.bilibili.com"], "danmu-token", ports=[443]
         )
 
     async def test_setup_feeds_hosts_even_when_monitor_disabled(self) -> None:

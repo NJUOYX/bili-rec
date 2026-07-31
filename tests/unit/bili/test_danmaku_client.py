@@ -317,15 +317,12 @@ class TestBroadcastUrl:
     def test_the_default_is_the_tls_endpoint(self) -> None:
         client = _make_client()
         client.set_danmu_info(["broadcastlv.chat.bilibili.com"], "t")
-        assert (
-            client._build_url("broadcastlv.chat.bilibili.com")
-            == "wss://broadcastlv.chat.bilibili.com/sub"
-        )
+        assert client._build_url(0) == "wss://broadcastlv.chat.bilibili.com/sub"
 
     def test_port_443_stays_on_tls(self) -> None:
         client = _make_client()
-        client.set_danmu_info(["host.example"], "t", port=443)
-        assert client._build_url("host.example") == "wss://host.example/sub"
+        client.set_danmu_info(["host.example"], "t", ports=[443])
+        assert client._build_url(0) == "wss://host.example/sub"
 
     def test_another_port_is_honoured(self) -> None:
         """Regression: the port from the API used to be dropped on the floor.
@@ -334,8 +331,30 @@ class TestBroadcastUrl:
         443 was simply unreachable, whatever the API said.
         """
         client = _make_client()
-        client.set_danmu_info(["127.0.0.1"], "t", port=8080)
-        assert client._build_url("127.0.0.1") == "ws://127.0.0.1:8080/sub"
+        client.set_danmu_info(["127.0.0.1"], "t", ports=[8080])
+        assert client._build_url(0) == "ws://127.0.0.1:8080/sub"
+
+    def test_each_host_keeps_its_own_port(self) -> None:
+        """Regression: rotating hosts used to carry the first host's port along.
+
+        Only ``host_list[0]``'s port was kept, so the moment the client rotated
+        away from the first host it aimed the next one's hostname at the previous
+        one's port — an address nobody advertised. With the first host down, the
+        rotation that exists to save the connection could never reach any of the
+        others.
+        """
+        client = _make_client()
+        client.set_danmu_info(["a.example", "b.example"], "t", ports=[8080, 9090])
+
+        assert client._build_url(0) == "ws://a.example:8080/sub"
+        assert client._build_url(1) == "ws://b.example:9090/sub"
+
+    def test_a_host_without_a_stated_port_falls_back_to_tls(self) -> None:
+        """A shorter port list must not make the extra hosts unusable."""
+        client = _make_client()
+        client.set_danmu_info(["a.example", "b.example"], "t", ports=[8080])
+
+        assert client._build_url(1) == "wss://b.example/sub"
 
 
 class TestConnectionState:
