@@ -27,6 +27,7 @@ from .harness import (
     wait_for_recording,
     wait_until,
     wait_until_not_recording,
+    wait_until_recording,
 )
 
 # Every test in this file needs the reconnect backoff shortened, or it would
@@ -136,6 +137,7 @@ class TestGivingUp:
 
         await add_task(client)
         await begin_live(client, fake_server)
+        await wait_until_recording(client)
 
         await wait_until_not_recording(client)
 
@@ -200,6 +202,7 @@ class TestDeadCdn:
 
         await add_task(client)
         await begin_live(client, fake_server)
+        await wait_until_recording(client)
 
         await wait_until_not_recording(client)
         assert fake_server.stream_requests == 0, "the live CDN was never tried"
@@ -221,6 +224,7 @@ class TestAStreamThatOffersNothing:
 
         await add_task(client)
         await begin_live(client, fake_server)
+        await wait_until_recording(client)
 
         await wait_until_not_recording(client)
 

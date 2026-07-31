@@ -26,6 +26,7 @@ from .harness import (
     status,
     wait_until,
     wait_until_not_recording,
+    wait_until_recording,
 )
 
 pytestmark = pytest.mark.usefixtures("fast_reconnect")
@@ -52,6 +53,7 @@ class TestCorruptedBytes:
 
         await add_task(client)
         await begin_live(client, fake_server)
+        await wait_until_recording(client)
 
         await wait_until_not_recording(client)
 
@@ -71,6 +73,7 @@ class TestCorruptedBytes:
 
         await add_task(client)
         await begin_live(client, fake_server)
+        await wait_until_recording(client)
 
         await wait_until_not_recording(client)
 

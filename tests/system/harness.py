@@ -108,6 +108,24 @@ async def wait_for_recording(out_dir: Path, *, min_size: int = 2000) -> Path:
     return flv
 
 
+async def wait_until_recording(
+    client: AsyncClient, room_id: int = ROOM_ID, *, timeout: float = TIMEOUT
+) -> None:
+    """Wait for the task to report that it started recording.
+
+    Worth stating explicitly before waiting for a stop: a task that has not
+    begun yet also is not recording, so a stop check on its own can pass without
+    anything having happened.
+    """
+
+    async def _started() -> bool:
+        return bool((await status(client, room_id))["running_status"] == "recording")
+
+    await wait_until_async(
+        _started, timeout=timeout, what="the task to report itself as recording"
+    )
+
+
 async def wait_until_not_recording(
     client: AsyncClient, room_id: int = ROOM_ID, *, timeout: float = TIMEOUT
 ) -> None:
