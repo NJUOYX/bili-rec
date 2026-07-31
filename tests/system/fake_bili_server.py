@@ -186,7 +186,10 @@ class FaultConfig:
     ws_fault_first_only: bool = False
 
 
-# A port nothing listens on, for the faults that need an unreachable endpoint.
+# An address nothing listens on, for the faults that need an unreachable
+# endpoint. A different host, not just a different port: real CDNs differ by
+# hostname, and that is what the fallback excludes on.
+_DEAD_HOST = "127.0.0.2"
 _DEAD_PORT = 1
 
 
@@ -274,7 +277,7 @@ class FakeBiliServer:
     @property
     def dead_url(self) -> str:
         """An address of the same shape as ``base_url`` that refuses connections."""
-        return f"http://127.0.0.1:{_DEAD_PORT}"
+        return f"http://{_DEAD_HOST}:{_DEAD_PORT}"
 
     async def start(self) -> None:
         self._runner = web.AppRunner(self._app)
