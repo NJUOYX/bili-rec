@@ -8,6 +8,7 @@ rather than a traceback.
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import shutil
 from pathlib import Path
@@ -17,9 +18,11 @@ from httpx import AsyncClient
 
 from .fake_bili_server import FakeBiliServer
 from .harness import (
+    ROOM_ID,
     add_task,
     begin_live,
     files,
+    wait_for_recording,
     wait_until,
     wait_until_not_recording,
     wait_until_recording,
@@ -146,22 +149,39 @@ class TestNotLeakingBetweenRecordings:
         def open_handles() -> int:
             return len(list(fd_dir.iterdir()))
 
-        baseline = 0
-        for round_number in range(3):
-            await begin_live(client, fake_server)
-            await wait_until(
-                lambda: bool(files(out_dir, ".flv")),
-                what=f"recording {round_number} to start",
-            )
-            await client.post("/api/v1/tasks/12345/recorder/disable")
-            await wait_until_not_recording(client)
-            await client.post("/api/v1/tasks/12345/recorder/enable")
-            if round_number == 0:
-                # After the first round everything that gets cached has been.
-                baseline = open_handles()
+        # The room stays live throughout; each round is one whole segment,
+        # opened by the switch and closed again, so the counts either side are
+        # taken with nothing recording — the only comparable moment.
+        await begin_live(client, fake_server)
+        await wait_until_recording(client)
 
-        # A couple of descriptors of slack for the sockets in flight; a leak per
-        # segment would show up as three or more.
-        assert open_handles() <= baseline + 2, (
-            f"open handles grew from {baseline} to {open_handles()} over 3 segments"
+        # Five rounds, and the baseline is taken from the second one. The first
+        # segment still has warm-up traffic around it, and a count taken there
+        # reads high enough to hide two rounds of an actual leak.
+        counts: list[int] = []
+        for round_number in range(5):
+            await wait_for_recording(out_dir, min_size=1000)
+            recorded = len(files(out_dir, ".flv") + files(out_dir, ".mp4"))
+
+            await client.post(f"/api/v1/tasks/{ROOM_ID}/recorder/disable")
+            await wait_until_not_recording(client)
+            await asyncio.sleep(0.4)
+            counts.append(open_handles())
+
+            await client.post(f"/api/v1/tasks/{ROOM_ID}/recorder/enable")
+            await wait_until_recording(client)
+            await wait_until(
+                lambda seen=recorded: (
+                    len(files(out_dir, ".flv") + files(out_dir, ".mp4")) > seen
+                ),
+                what=f"segment {round_number + 2} to open its own file",
+            )
+
+        baseline, final = counts[1], counts[-1]
+        # One descriptor of slack for a socket the connector is still pooling.
+        # A handle held per segment grows this by one each round, which four
+        # rounds of separation makes unmistakable.
+        assert final <= baseline + 1, (
+            f"open handles grew {baseline} → {final} over four more finished "
+            f"segments (per round: {counts})"
         )
