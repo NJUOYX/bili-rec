@@ -233,13 +233,13 @@ class TestBroadcastsBackToBack:
         )
         xml = next(iter(out_dir.rglob("*.xml")))
 
-        for i in range(200):
+        for i in range(500):
             await fake_server.send_danmaku(f"flood {i}")
 
         await wait_until(
-            lambda: "flood 199" in xml.read_text(encoding="utf-8"),
+            lambda: "flood 499" in xml.read_text(encoding="utf-8"),
             what="the whole burst to be written",
         )
         content = xml.read_text(encoding="utf-8")
-        missing = [i for i in range(200) if f">flood {i}<" not in content]
+        missing = [i for i in range(500) if f">flood {i}<" not in content]
         assert not missing, f"{len(missing)} messages were dropped from the burst"

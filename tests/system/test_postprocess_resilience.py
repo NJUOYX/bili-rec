@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 import pytest
 from httpx import AsyncClient
@@ -139,6 +140,68 @@ class TestWhenTheDanmakuCannotBeConverted:
         assert flv.exists(), "the recording was lost to a subtitle conversion"
         assert files(out_dir, ".xml"), "the danmaku XML was lost with the conversion"
         assert not files(out_dir, ".ass")
+
+
+class TestDanmakuTextThatFightsXml:
+    """Danmaku text is arbitrary, and the XML it goes into is not."""
+
+    async def test_xml_hostile_danmaku_still_produce_a_readable_document(
+        self,
+        client: AsyncClient,
+        fake_server: FakeBiliServer,
+        out_dir: Path,
+    ) -> None:
+        """A viewer typing ``&`` or ``<`` must not corrupt the whole file.
+
+        The XML is written by hand, one line at a time, so an unescaped
+        character does not fail loudly: it produces a document that every parser
+        rejects, taking the entire session's danmaku with it and failing the ASS
+        conversion downstream. Checked with a real parser rather than by looking
+        for substrings, because well-formedness is exactly the property at stake.
+        """
+        await client.patch(
+            "/api/v1/settings",
+            json={"postprocessing": {"danmaku_to_ass": True, "remux_to_mp4": False}},
+        )
+        await add_task(client)
+        task = client.app.state.application.task_manager.get_task(ROOM_ID)  # type: ignore[attr-defined]
+        await wait_until(
+            lambda: task._danmaku_client.connected,  # noqa: SLF001
+            what="the danmaku client to connect",
+        )
+        await begin_live(client, fake_server)
+        await wait_until(
+            lambda: bool(list(out_dir.rglob("*.xml"))), what="the XML to be created"
+        )
+        xml = next(iter(out_dir.rglob("*.xml")))
+
+        hostile = 'A & B < C > D " E \' F <d p="fake">injected</d>'
+        await fake_server.send_danmaku(hostile, uname='an<gry>&"viewer"')
+        await fake_server.send_danmaku("plain one after it")
+        await wait_until(
+            lambda: "plain one after it" in xml.read_text(encoding="utf-8"),
+            what="the hostile danmaku and the one behind it to be written",
+        )
+
+        await client.post(f"/api/v1/tasks/{ROOM_ID}/recorder/disable")
+        await wait_until_not_recording(client)
+        await wait_until(
+            lambda: xml.read_text(encoding="utf-8").rstrip().endswith("</i>"),
+            what="the document to be closed off",
+        )
+
+        # The whole point: a parser has to accept it.
+        tree = ElementTree.parse(xml)
+        texts = [element.text or "" for element in tree.getroot().iter("d")]
+        assert hostile in texts, "the text was mangled on its way through the escaping"
+        # And the injected markup stayed text rather than becoming an element.
+        assert tree.getroot().find(".//d/d") is None, "the danmaku injected an element"
+
+        # Downstream still works: the subtitles were produced from that document.
+        await wait_until(
+            lambda: bool(files(out_dir, ".ass")),
+            what="the ASS subtitle to be written from the hostile XML",
+        )
 
 
 class TestTheQueue:
