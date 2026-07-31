@@ -26,8 +26,10 @@ from .harness import (
     end_live,
     files,
     status,
+    wait_for_recording,
     wait_until,
     wait_until_not_recording,
+    wait_until_recording,
 )
 
 pytestmark = pytest.mark.usefixtures("fast_reconnect")
@@ -180,6 +182,100 @@ class TestFlippingSwitchesFast:
         await wait_until_not_recording(client)
         task = client.app.state.application.task_manager.get_task(ROOM_ID)  # type: ignore[attr-defined]
         assert task._recorder._download_task is None  # noqa: SLF001
+
+
+class TestTurningRecordingBackOn:
+    """A room that is still live must be picked back up when switched on."""
+
+    async def test_re_enabling_the_recorder_resumes_a_live_room(
+        self, client: AsyncClient, fake_server: FakeBiliServer, out_dir: Path
+    ) -> None:
+        """Regression (#17): switching recording back on must actually record.
+
+        Recording is driven by the ``live_began`` event, and enabling only
+        re-attached the listener and waited for one. The room was already live,
+        so that event was never coming again: the switch read "on", the monitor
+        knew the room was live, and nothing started. The periodic check could not
+        rescue it either — it only fires when the monitor thinks the room is
+        *not* live. Recording resumed only after the streamer went off and back
+        on air.
+
+        "Pause for a bit, then carry on" is one of the most ordinary things to do
+        with a recorder, and the same dead end is reached by every automatic stop
+        (retries exhausted, unparseable stream, disk full).
+        """
+        await add_task(client)
+        await begin_live(client, fake_server)
+        await wait_for_recording(out_dir, min_size=1000)
+
+        resp = await client.post(f"/api/v1/tasks/{ROOM_ID}/recorder/disable")
+        assert resp.json()["code"] == 0
+        await wait_until_not_recording(client)
+        before = len(files(out_dir, ".flv") + files(out_dir, ".mp4"))
+
+        # The room never stopped broadcasting.
+        assert fake_server.live_status == 1
+
+        resp = await client.post(f"/api/v1/tasks/{ROOM_ID}/recorder/enable")
+        assert resp.json()["code"] == 0
+
+        await wait_until_recording(client, timeout=10.0)
+        await wait_until(
+            lambda: len(files(out_dir, ".flv") + files(out_dir, ".mp4")) > before,
+            timeout=10.0,
+            what="a new recording for the room that never stopped being live",
+        )
+
+    async def test_restarting_the_monitor_resumes_a_live_room(
+        self, client: AsyncClient, fake_server: FakeBiliServer, out_dir: Path
+    ) -> None:
+        """Regression (#17): the same dead end via the monitor switch.
+
+        ``LiveMonitor._do_disable`` cancels its tasks without clearing
+        ``_is_living``, so on restart the check that exists to catch a room that
+        is already live sees its own stale flag and does nothing.
+        """
+        await add_task(client)
+        await begin_live(client, fake_server)
+        await wait_for_recording(out_dir, min_size=1000)
+
+        resp = await client.post(f"/api/v1/tasks/{ROOM_ID}/stop")
+        assert resp.json()["code"] == 0
+        await wait_until_not_recording(client)
+        before = len(files(out_dir, ".flv") + files(out_dir, ".mp4"))
+
+        assert fake_server.live_status == 1
+
+        resp = await client.post(f"/api/v1/tasks/{ROOM_ID}/start")
+        assert resp.json()["code"] == 0
+
+        await wait_until_recording(client, timeout=10.0)
+        await wait_until(
+            lambda: len(files(out_dir, ".flv") + files(out_dir, ".mp4")) > before,
+            timeout=10.0,
+            what="a new recording after the monitor was restarted",
+        )
+
+    async def test_enabling_for_an_offline_room_does_not_record(
+        self, client: AsyncClient, fake_server: FakeBiliServer, out_dir: Path
+    ) -> None:
+        """The other half: an idle room must not start recording on enable.
+
+        Checking "is it live right now" has to consult reality rather than
+        assume it, or switching the recorder on would produce a file out of a
+        room that is showing its idle screen.
+        """
+        await add_task(client)
+        assert fake_server.live_status == 0
+
+        resp = await client.post(f"/api/v1/tasks/{ROOM_ID}/recorder/disable")
+        assert resp.json()["code"] == 0
+        resp = await client.post(f"/api/v1/tasks/{ROOM_ID}/recorder/enable")
+        assert resp.json()["code"] == 0
+
+        await asyncio.sleep(1.5)
+        assert (await status(client))["running_status"] != "recording"
+        assert files(out_dir, ".flv") == [], "an offline room produced a recording"
 
 
 class TestBroadcastsBackToBack:

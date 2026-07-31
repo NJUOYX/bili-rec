@@ -108,6 +108,25 @@ class TestLiveMonitorCommands:
         assert "room_changed" in listener.events
         monitor.disable()
 
+    async def test_disabling_forgets_whether_the_room_was_live(self) -> None:
+        """Regression (#17): a disabled monitor knows nothing, and must say so.
+
+        ``_do_disable`` only cancelled its tasks, so the flag stayed true. The
+        check that runs on enable exists precisely to catch a room that is
+        already live, and it only fires when the monitor believes the room is
+        *not* live — so its own stale flag stopped it, and restarting the monitor
+        never picked a broadcast back up.
+        """
+        monitor, live = _make_monitor()
+        monitor.enable()
+        await monitor.handle_command("LIVE")
+        assert monitor.is_living is True
+
+        monitor.disable()
+
+        assert monitor.is_living is False
+        assert monitor.stream_available is False
+
     async def test_disabled_monitor_ignores_commands(self) -> None:
         monitor, live = _make_monitor()
         listener = _RecordingListener()
