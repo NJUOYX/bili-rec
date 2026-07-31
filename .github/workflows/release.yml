@@ -48,17 +48,27 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Compute image tag
+      - name: Compute image tags
         id: meta
         env:
           REPO: ${{ github.repository }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          echo "tag=ghcr.io/${REPO}:${REF_NAME}" >> "$GITHUB_OUTPUT"
+          # An OCI repository name has to be lowercase, and github.repository
+          # carries the owner exactly as written. Pushing "ghcr.io/Owner/name"
+          # fails outright, and nothing before the first real tag would have
+          # caught it: the CI docker job builds without pushing.
+          repo=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
+          {
+            echo "tags=ghcr.io/${repo}:${REF_NAME},ghcr.io/${repo}:latest"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           push: true
-          tags: ${{ steps.meta.outputs.tag }}
+          tags: ${{ steps.meta.outputs.tags }}
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          # Otherwise the release body is empty, which for a first release is
+          # the only thing a visitor has to go on.
+          generate_release_notes: true
