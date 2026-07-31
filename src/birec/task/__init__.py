@@ -427,12 +427,26 @@ class RecordTask:
     # ── recorder control ─────────────────────────────────────────────────
 
     def enable_recorder(self) -> None:
-        """Enable recording by registering the recorder as a monitor listener."""
+        """Enable recording, picking up a broadcast that is already under way.
+
+        Attaching the listener only arranges for the *next* ``live_began``, and
+        for a room that is live right now that event has already been and gone.
+        Waiting for another one means waiting for the streamer to go off and back
+        on air, which is why switching recording back on used to do nothing at
+        all (#17).
+        """
         if self._recorder_enabled:
             return
         self._recorder_enabled = True
         self._monitor.add_listener(self._recorder)
-        logger.debug("Recorder enabled for room %d", self._room_id)
+        if self._monitor.is_living:
+            logger.info(
+                "Recorder enabled for room %d while it is live, starting now",
+                self._room_id,
+            )
+            self._recorder.on_live_began(self._live)
+        else:
+            logger.debug("Recorder enabled for room %d", self._room_id)
 
     async def disable_recorder(self) -> None:
         """Disable recording and finalize any segment still in progress."""

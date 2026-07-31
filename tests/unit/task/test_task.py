@@ -547,6 +547,34 @@ class TestRecordTaskControl:
         assert not task.recorder_enabled
         comps["monitor"].remove_listener.assert_called_once_with(comps["recorder"])
 
+    async def test_enabling_the_recorder_starts_a_live_room_at_once(self) -> None:
+        """Regression (#17): a broadcast under way must be picked up on enable.
+
+        Attaching the listener only arranges for the *next* ``live_began``, and
+        for a room that is already live that event has been and gone. Waiting for
+        another one means waiting for the streamer to go off and back on air, so
+        switching recording back on appeared to do nothing at all.
+        """
+        task, comps = _make_task(enable_recorder=False)
+        comps["monitor"].is_living = True
+
+        task.enable_recorder()
+
+        comps["recorder"].on_live_began.assert_called_once_with(comps["live"])
+
+    async def test_enabling_the_recorder_for_an_idle_room_starts_nothing(self) -> None:
+        """The other half: an idle room must not be recorded on enable.
+
+        Otherwise flipping the switch would produce a file out of a room that is
+        showing its idle screen.
+        """
+        task, comps = _make_task(enable_recorder=False)
+        comps["monitor"].is_living = False
+
+        task.enable_recorder()
+
+        comps["recorder"].on_live_began.assert_not_called()
+
     async def test_disable_recorder_stops_recording_in_progress(self) -> None:
         """Regression: turning recording off must finalize the current segment.
 
