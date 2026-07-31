@@ -96,14 +96,20 @@ async def status(client: AsyncClient, room_id: int = ROOM_ID) -> dict[str, Any]:
     return body["data"]["task_status"]  # type: ignore[no-any-return]
 
 
-async def wait_for_recording(out_dir: Path, *, min_size: int = 2000) -> Path:
+async def wait_for_recording(
+    out_dir: Path, *, min_size: int = 2000, timeout: float = TIMEOUT
+) -> Path:
     """Wait until a recording exists and has real stream data in it."""
     await wait_until(
-        lambda: bool(files(out_dir, ".flv")), what="the FLV file to be created"
+        lambda: bool(files(out_dir, ".flv")),
+        timeout=timeout,
+        what="the FLV file to be created",
     )
     flv = files(out_dir, ".flv")[0]
     await wait_until(
-        lambda: flv.stat().st_size > min_size, what="stream data to reach the disk"
+        lambda: flv.stat().st_size > min_size,
+        timeout=timeout,
+        what="stream data to reach the disk",
     )
     return flv
 

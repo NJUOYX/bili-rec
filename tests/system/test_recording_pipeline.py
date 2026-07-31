@@ -314,7 +314,7 @@ class TestHlsRecording:
 
         await wait_until(
             lambda: fake_server.playlist_requests > 0,
-            timeout=8.0,
+            timeout=4.0,
             what="the HLS playlist to be fetched",
         )
         assert fake_server.segment_requests > 0

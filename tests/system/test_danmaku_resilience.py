@@ -210,6 +210,6 @@ class TestKeepingTheSocketAlive:
 
         await wait_until(
             lambda: fake_server.ws_connections_total >= 2,
-            timeout=5.0,
+            timeout=2.0,
             what="the unanswered heartbeat to trigger a reconnect",
         )

@@ -188,7 +188,7 @@ class TestDeadCdn:
         await add_task(client)
         await begin_live(client, fake_server)
 
-        await wait_for_recording(out_dir, min_size=1000)
+        await wait_for_recording(out_dir, min_size=1000, timeout=4.0)
 
     async def test_an_unreachable_cdn_is_reported_rather_than_hidden(
         self, client: AsyncClient, fake_server: FakeBiliServer, out_dir: Path
@@ -262,6 +262,9 @@ class TestAStreamThatOffersNothing:
         """
         fake_server.set_fault(api_error_code=-400)
 
+        # Slow on purpose: the API layer retries a failing endpoint for twenty
+        # seconds before giving up, and going through that budget for real is
+        # the difference between this and the unit test of the same handler.
         resp = await client.post(f"/api/v1/tasks/{ROOM_ID}", json={"room_id": ROOM_ID})
 
         assert resp.status_code == 200

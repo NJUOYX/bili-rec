@@ -118,8 +118,11 @@ class TestFakeServerBasics:
         async with aiohttp.ClientSession() as session:
             url = f"{fake_server.base_url}/stream.flv"
             async with session.get(url) as resp:
-                data = await resp.read()
-        assert data[:3] == b"FLV"
+                # Only the signature is of interest here, and the endpoint keeps
+                # a chunked stream flowing for as long as a recording needs it:
+                # reading it to the end would be waiting out the whole payload.
+                data = await resp.content.readexactly(3)
+        assert data == b"FLV"
 
     async def test_danmu_info(self, fake_server: FakeBiliServer) -> None:
         import aiohttp
