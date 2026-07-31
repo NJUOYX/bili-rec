@@ -169,13 +169,14 @@ API 基础路径为 `/api/v1`，主要端点：
 | GET | `/api/v1/app/status` | 应用运行状态 |
 | GET | `/api/v1/app/info` | 应用版本信息 |
 | GET | `/api/v1/settings` | 获取全局设置 |
-| PUT | `/api/v1/settings` | 更新全局设置 |
-| GET | `/api/v1/tasks` | 获取所有任务列表 |
-| POST | `/api/v1/tasks` | 添加录制任务 |
+| PATCH | `/api/v1/settings` | 更新全局设置 |
+| GET | `/api/v1/tasks/data` | 获取所有任务列表 |
+| POST | `/api/v1/tasks/{room_id}` | 添加录制任务 |
 | DELETE | `/api/v1/tasks/{room_id}` | 删除任务 |
 | POST | `/api/v1/tasks/{room_id}/start` | 启动录制 |
 | POST | `/api/v1/tasks/{room_id}/stop` | 停止录制 |
-| WS | `/api/v1/ws` | WebSocket 实时事件 |
+| WS | `/ws/v1/events` | WebSocket 实时事件 |
+| WS | `/ws/v1/exceptions` | WebSocket 异常推送 |
 
 完整的 OpenAPI 文档见 [docs/design/openapi.json](docs/design/openapi.json)，服务启动后也可访问 `/docs`（Swagger UI）。
 
