@@ -697,3 +697,163 @@ class TestPostprocessorExtended:
         # Should complete despite delete failure
         assert pp.current_item is None
 
+
+class TestPostprocessorDanmakuConversion:
+    """The danmaku step must survive a broken remux and honour hot updates."""
+
+    async def _run(
+        self,
+        pp: Postprocessor,
+        source: Path,
+        output: Path,
+        related_files: list[Path] | None = None,
+    ) -> None:
+        await pp.start()
+        pp.submit(source, output, related_files=related_files)
+        await asyncio.sleep(0.2)
+        await pp.stop()
+
+    @pytest.mark.asyncio
+    async def test_ass_is_written_for_related_xml(self, tmp_path: Path) -> None:
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=False,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=True,
+        )
+        await self._run(pp, source, tmp_path / "rec.mp4", [xml])
+
+        assert (tmp_path / "rec.ass").exists()
+
+    @pytest.mark.asyncio
+    async def test_ass_survives_a_failing_remux(self, tmp_path: Path) -> None:
+        """Regression: a failed remux used to abort the whole pipeline.
+
+        The danmaku conversion ran after it, so a missing or unhappy ffmpeg cost
+        the user their subtitles too even though the two are unrelated.
+        """
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+
+        completed: list[PostprocessingItem] = []
+        pp = Postprocessor(
+            remux_enabled=True,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=True,
+            on_completed=completed.append,
+        )
+
+        with patch(
+            "birec.postprocess.postprocessor.remux_flv_to_mp4",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            await self._run(pp, source, tmp_path / "rec.mp4", [xml])
+
+        assert completed[0].status == PostprocessingStatus.FAILED
+        assert (tmp_path / "rec.ass").exists()
+
+    @pytest.mark.asyncio
+    async def test_related_danmaku_files_are_kept(self, tmp_path: Path) -> None:
+        """The XML/JSONL the ASS came from must outlive the auto-cleanup."""
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+        raw = tmp_path / "rec.jsonl"
+        raw.write_text("{}\n", encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=False,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=True,
+        )
+        await self._run(pp, source, tmp_path / "rec.mp4", [xml, raw])
+
+        assert xml.exists()
+        assert raw.exists()
+
+    @pytest.mark.asyncio
+    async def test_disabled_conversion_writes_nothing(self, tmp_path: Path) -> None:
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=False,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=False,
+        )
+        await self._run(pp, source, tmp_path / "rec.mp4", [xml])
+
+        assert not (tmp_path / "rec.ass").exists()
+
+    @pytest.mark.asyncio
+    async def test_update_options_reaches_the_running_worker(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: a settings change must apply to an already running task.
+
+        The switches were frozen at construction, so enabling danmaku→ASS only
+        took effect for rooms added afterwards.
+        """
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=False,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=False,
+        )
+        pp.update_options(danmaku_to_ass_enabled=True)
+        assert pp.danmaku_to_ass_enabled is True
+
+        await self._run(pp, source, tmp_path / "rec.mp4", [xml])
+
+        assert (tmp_path / "rec.ass").exists()
+
+    def test_update_options_leaves_omitted_switches_alone(self) -> None:
+        config = DanmakuToAssConfig(font_size=30)
+        pp = Postprocessor(
+            remux_enabled=True,
+            inject_metadata_enabled=True,
+            danmaku_to_ass_enabled=True,
+            danmaku_config=config,
+        )
+
+        pp.update_options(remux_enabled=False)
+
+        assert pp.remux_enabled is False
+        assert pp.inject_metadata_enabled is True
+        assert pp.danmaku_to_ass_enabled is True
+        assert pp.danmaku_config is config
+
+    def test_update_options_replaces_the_danmaku_config(self) -> None:
+        pp = Postprocessor()
+        config = DanmakuToAssConfig(font_size=48, resolution_x=1280)
+
+        pp.update_options(danmaku_config=config)
+
+        assert pp.danmaku_config == config
+
+    @pytest.mark.asyncio
+    async def test_completion_listener_can_be_set_late(self, tmp_path: Path) -> None:
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+
+        completed: list[PostprocessingItem] = []
+        pp = Postprocessor(remux_enabled=False, inject_metadata_enabled=False)
+        pp.set_completion_listener(completed.append)
+
+        await self._run(pp, source, tmp_path / "rec.mp4")
+
+        assert [item.status for item in completed] == [PostprocessingStatus.COMPLETED]
