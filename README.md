@@ -290,12 +290,13 @@ frontend/          # React SPA 前端（Ant Design + TanStack Query）
 
 ## 已知限制
 
-当前版本以 FLV 录制为主线，以下两处尚未接通，会在后续版本补齐：
+当前版本以 FLV 录制为主线，以下几处尚未接通或有前提，会在后续版本补齐：
 
 | 限制 | 表现 | 影响 |
 |---|---|---|
 | **fMP4/HLS 录制未接通** | `stream_format` 设为 `fmp4` 时设置会被接受并回读，但实际仍以 FLV 录制 | 录制正常，只是格式不是所选的那个 |
 | **广播心跳无应答校验** | 服务端停止响应心跳时，客户端不会察觉并重连 | 极少数半开连接下该房间会静默收不到弹幕，重启任务可恢复 |
+| **更新检查依赖 PyPI** | `/api/v1/update/version/latest` 去 PyPI 查 `birec`；本项目目前只发 GitHub Release 与 GHCR 镜像，未发布到 PyPI，因此该接口会返回 404 | 不影响录制；请到 [Releases](https://github.com/OuYax/bili-rec/releases) 查看新版本 |
 
 磁盘空间监控默认开启（低于阈值时告警）；**自动回收旧录像默认关闭**，需在设置里
 打开 `space.recycle_records` —— 它会删掉超过 TTL 的录像文件。
