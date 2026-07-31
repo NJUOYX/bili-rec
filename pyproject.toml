@@ -52,6 +52,11 @@ path = "src/birec/__init__.py"
 # looked correct produced a wheel with no UI in it.
 [tool.hatch.build]
 artifacts = ["src/birec/web/static/**"]
+# The frontend is a separate toolchain with its own lockfile and its own
+# .gitignore, and hatchling only reads the root one — so node_modules lands in
+# the sdist and takes it from under a megabyte to 33 MB. What a source build
+# needs from the frontend is the built UI, and that arrives via ``artifacts``.
+exclude = ["/frontend"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/birec"]

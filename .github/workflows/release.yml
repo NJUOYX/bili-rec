@@ -59,8 +59,16 @@ jobs:
           # fails outright, and nothing before the first real tag would have
           # caught it: the CI docker job builds without pushing.
           repo=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
+          tags="ghcr.io/${repo}:${REF_NAME}"
+          # A pre-release must not become what `docker pull` gets by default,
+          # nor be presented as the current version on the releases page.
+          case "$REF_NAME" in
+            *-*) prerelease=true ;;
+            *)   prerelease=false; tags="${tags},ghcr.io/${repo}:latest" ;;
+          esac
           {
-            echo "tags=ghcr.io/${repo}:${REF_NAME},ghcr.io/${repo}:latest"
+            echo "tags=${tags}"
+            echo "prerelease=${prerelease}"
           } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
@@ -68,7 +76,12 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          # Named rather than globbed: uv drops a .gitignore into dist/, and
+          # "dist/*" uploaded it as an asset called default.gitignore.
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          prerelease: ${{ steps.meta.outputs.prerelease }}
           # Otherwise the release body is empty, which for a first release is
           # the only thing a visitor has to go on.
           generate_release_notes: true
