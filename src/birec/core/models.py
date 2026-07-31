@@ -13,6 +13,7 @@ __all__ = (
     "GuardBuy",
     "DanmakuMessage",
     "StreamEvent",
+    "CompletedSegment",
 )
 
 
@@ -163,3 +164,16 @@ class StreamEvent:
     room_id: int
     timestamp: datetime = field(default_factory=lambda: datetime.now())
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class CompletedSegment:
+    """The files one finished recording segment left on disk.
+
+    Collected while the segment is closed down, because the danmaku paths live
+    on the dumpers and those are dropped as part of the same teardown.
+    """
+
+    video_path: str
+    danmaku_path: str = ""
+    raw_danmaku_path: str = ""

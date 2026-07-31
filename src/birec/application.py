@@ -6,6 +6,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 import aiohttp
 from fastapi import FastAPI
@@ -37,6 +38,15 @@ logger = logging.getLogger(__name__)
 def _pick[T](override: T | None, fallback: T) -> T:
     """Task-level override wins; ``None`` falls back to the global setting."""
     return fallback if override is None else override
+
+
+class _PostprocessingChoice(NamedTuple):
+    """The post-processing switches resolved for one room."""
+
+    remux_enabled: bool
+    inject_metadata_enabled: bool
+    danmaku_to_ass_enabled: bool
+    danmaku_config: DanmakuToAssConfig
 
 
 class Application:
@@ -230,9 +240,51 @@ class Application:
             cover_downloader=CoverDownloader(self._session) if save_cover else None,
         )
 
+        choice = self._postprocessing_for(settings, task)
+        postprocessor = Postprocessor(
+            remux_enabled=choice.remux_enabled,
+            inject_metadata_enabled=choice.inject_metadata_enabled,
+            danmaku_to_ass_enabled=choice.danmaku_to_ass_enabled,
+            danmaku_config=choice.danmaku_config,
+        )
+
+        return RecordTask(
+            room_id,
+            live,
+            danmaku_client,
+            monitor,
+            recorder,
+            postprocessor,
+            enable_monitor=task.enable_monitor if task else True,
+            enable_recorder=task.enable_recorder if task else True,
+        )
+
+    def refresh_postprocessing_options(self) -> None:
+        """Push the current post-processing settings onto every live task.
+
+        The switches are resolved per room the same way ``_create_task`` does,
+        so a task-level override still wins over the global value.
+        """
+        settings = self._settings_manager.settings
+        for task in self._task_manager.get_all_tasks():
+            choice = self._postprocessing_for(
+                settings, self._task_for(settings, task.room_id)
+            )
+            task.update_postprocessing(
+                remux_enabled=choice.remux_enabled,
+                inject_metadata_enabled=choice.inject_metadata_enabled,
+                danmaku_to_ass_enabled=choice.danmaku_to_ass_enabled,
+                danmaku_config=choice.danmaku_config,
+            )
+
+    @staticmethod
+    def _postprocessing_for(
+        settings: Settings, task: TaskSettings | None
+    ) -> _PostprocessingChoice:
+        """Resolve the post-processing switches for a room."""
         post = settings.postprocessing
         overrides = task.postprocessing if task else None
-        postprocessor = Postprocessor(
+        return _PostprocessingChoice(
             remux_enabled=_pick(
                 overrides.remux_to_mp4 if overrides else None, post.remux_to_mp4
             ),
@@ -260,17 +312,6 @@ class Application:
                     post.ass_resolution_y,
                 ),
             ),
-        )
-
-        return RecordTask(
-            room_id,
-            live,
-            danmaku_client,
-            monitor,
-            recorder,
-            postprocessor,
-            enable_monitor=task.enable_monitor if task else True,
-            enable_recorder=task.enable_recorder if task else True,
         )
 
     @staticmethod

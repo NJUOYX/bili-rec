@@ -65,6 +65,51 @@ class Postprocessor:
     def current_item(self) -> PostprocessingItem | None:
         return self._current_item
 
+    @property
+    def remux_enabled(self) -> bool:
+        return self._remux_enabled
+
+    @property
+    def inject_metadata_enabled(self) -> bool:
+        return self._inject_metadata_enabled
+
+    @property
+    def danmaku_to_ass_enabled(self) -> bool:
+        return self._danmaku_to_ass_enabled
+
+    @property
+    def danmaku_config(self) -> DanmakuToAssConfig:
+        return self._danmaku_config
+
+    def update_options(
+        self,
+        *,
+        remux_enabled: bool | None = None,
+        inject_metadata_enabled: bool | None = None,
+        danmaku_to_ass_enabled: bool | None = None,
+        danmaku_config: DanmakuToAssConfig | None = None,
+    ) -> None:
+        """Hot-update the processing switches; ``None`` leaves one untouched.
+
+        The switches are read per item, so a settings change reaches recordings
+        that are still to come on an already running task instead of only the
+        tasks created afterwards.
+        """
+        if remux_enabled is not None:
+            self._remux_enabled = remux_enabled
+        if inject_metadata_enabled is not None:
+            self._inject_metadata_enabled = inject_metadata_enabled
+        if danmaku_to_ass_enabled is not None:
+            self._danmaku_to_ass_enabled = danmaku_to_ass_enabled
+        if danmaku_config is not None:
+            self._danmaku_config = danmaku_config
+
+    def set_completion_listener(
+        self, listener: Callable[[PostprocessingItem], None] | None
+    ) -> None:
+        """Register the callback fired after each item leaves the queue."""
+        self._on_completed = listener
+
     async def start(self) -> None:
         """Start the postprocessor worker."""
         if self._running:
@@ -137,7 +182,12 @@ class Postprocessor:
         source = item.source_path
         suffix = source.suffix.lower()
 
-        # Step 1: Remux
+        # Step 1: Danmaku XML→ASS. Runs ahead of the remux so that a missing or
+        # failing ffmpeg does not cost the user their subtitles as well.
+        if self._danmaku_to_ass_enabled:
+            await self._convert_danmaku(item)
+
+        # Step 2: Remux
         if self._remux_enabled:
             item.status = PostprocessingStatus.REMUXING
             item.progress = PostprocessingProgress(status=PostprocessingStatus.REMUXING)
@@ -157,7 +207,7 @@ class Postprocessor:
                 item.error = f"Remux failed for {source}"
                 return
 
-        # Step 2: Metadata injection
+        # Step 3: Metadata injection
         if self._inject_metadata_enabled:
             item.status = PostprocessingStatus.INJECTING
             item.progress = PostprocessingProgress(
@@ -165,15 +215,6 @@ class Postprocessor:
             )
             # Metadata injection is optional - don't fail the whole task
             # if it fails
-
-        # Step 3: Danmaku XML→ASS
-        if self._danmaku_to_ass_enabled:
-            for related in item.related_files:
-                if related.suffix.lower() == ".xml":
-                    ass_path = related.with_suffix(".ass")
-                    await convert_danmaku_to_ass(
-                        related, ass_path, config=self._danmaku_config
-                    )
 
         # Step 4: AUTO delete source
         self._delete_source(item)
@@ -183,6 +224,15 @@ class Postprocessor:
             status=PostprocessingStatus.COMPLETED, percent=100.0
         )
         logger.debug("Postprocessing completed: %s", item.source_path)
+
+    async def _convert_danmaku(self, item: PostprocessingItem) -> None:
+        """Convert every danmaku XML among the item's related files to ASS."""
+        for related in item.related_files:
+            if related.suffix.lower() == ".xml":
+                ass_path = related.with_suffix(".ass")
+                await convert_danmaku_to_ass(
+                    related, ass_path, config=self._danmaku_config
+                )
 
     def _delete_source(self, item: PostprocessingItem) -> None:
         """Delete source files (AUTO strategy: only on success)."""

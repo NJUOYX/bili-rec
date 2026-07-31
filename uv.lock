@@ -228,6 +228,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "brotli" },
+    { name = "dmconvert" },
     { name = "fastapi" },
     { name = "loguru" },
     { name = "lxml" },
@@ -259,6 +260,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3" },
     { name = "aioresponses", marker = "extra == 'dev'" },
     { name = "brotli" },
+    { name = "dmconvert", specifier = ">=0.0.4" },
     { name = "fastapi" },
     { name = "loguru" },
     { name = "lxml" },
@@ -434,6 +436,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c9/02/bd72be9134d25ed783ecbbc38a539ffaefbf90c78418c7fb7229600dbac7/distlib-0.4.3.tar.gz", hash = "sha256:f152097224a0ae24be5a0f6bae1b9359af82133bce63f98a95f86cae1aede9ed", size = 615141, upload-time = "2026-06-12T08:04:52.847Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/08/9c41fb51ab5b43eb21674aff13df270e8ba6c4b29c8624e328dc7a9482af/distlib-0.4.3-py2.py3-none-any.whl", hash = "sha256:4b0ce306c966eb73bc3a7b6abad017c556dadd92c44701562cd528ac7fde4d5b", size = 470628, upload-time = "2026-06-12T08:04:50.506Z" },
+]
+
+[[package]]
+name = "dmconvert"
+version = "0.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5f/f7/949ba750a9ce1fd4bd6788adb51ec881738779169fdab74c2ccd8cddd743/dmconvert-0.0.4.tar.gz", hash = "sha256:e2cb863767a80ab74be45a47e9f9d31ec10e100f3417469c4aa2ff2f7e3f137d", size = 37910728, upload-time = "2025-04-01T15:12:04.296Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8c/3f/f0fab6564e7202b553b97b09e6701241947ff219d8577e32d309cc772d76/dmconvert-0.0.4-py3-none-any.whl", hash = "sha256:f91313e8f20ec18cf7d4d94ff398ddcc2039e8c3d8e53fd7a35ef6dca5de6cb3", size = 33854, upload-time = "2025-04-01T15:11:48.168Z" },
 ]
 
 [[package]]

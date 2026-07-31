@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +12,6 @@ import pytest
 from birec.postprocess.danmaku_to_ass import (
     DanmakuToAssConfig,
     convert_danmaku_to_ass,
-    find_dmconvert,
 )
 from birec.postprocess.metadata import MediaMetadata, inject_metadata
 from birec.postprocess.models import (
@@ -29,8 +29,16 @@ from birec.postprocess.remux import (
 _FFMPEG = "/usr/bin/ffmpeg"
 _REMUX_FIND = "birec.postprocess.remux.find_ffmpeg"
 _META_FIND = "birec.postprocess.metadata.find_ffmpeg"
-_DM_FIND = "birec.postprocess.danmaku_to_ass.find_dmconvert"
 _SUBPROCESS = "asyncio.create_subprocess_exec"
+
+# One rolling danmaku, enough for the converter to emit a dialogue line.
+_DANMAKU_XML = (
+    "<?xml version='1.0' encoding='utf-8'?>\n"
+    "<i>"
+    '<d p="1.000,1,25,16777215,1733047466414,0,73c9f86f,-1189105972" '
+    'uid="0" user="X***">hello</d>'
+    "</i>"
+)
 
 # ── remux.py tests ────────────────────────────────────────────────────────────
 
@@ -428,124 +436,82 @@ class TestInjectMetadata:
 # ── danmaku_to_ass.py tests ──────────────────────────────────────────────────
 
 
-class TestFindDmconvert:
-    def test_find_dmconvert_exists(self) -> None:
-        with patch("shutil.which", return_value="/usr/bin/dmconvert"):
-            assert find_dmconvert() == "/usr/bin/dmconvert"
-
-    def test_find_dmconvert_not_found(self) -> None:
-        with patch("shutil.which", return_value=None):
-            assert find_dmconvert() is None
-
-
 class TestConvertDanmakuToAss:
-    @pytest.mark.asyncio
-    async def test_dmconvert_not_found(self, tmp_path: Path) -> None:
-        xml = tmp_path / "danmaku.xml"
-        xml.write_text("<i></i>")
-        output = tmp_path / "danmaku.ass"
-
-        with patch(_DM_FIND, return_value=None):
-            result = await convert_danmaku_to_ass(xml, output)
-        assert result is False
-
     @pytest.mark.asyncio
     async def test_xml_not_found(self, tmp_path: Path) -> None:
         xml = tmp_path / "nonexistent.xml"
         output = tmp_path / "danmaku.ass"
 
-        with patch(
-            "birec.postprocess.danmaku_to_ass.find_dmconvert",
-            return_value="/usr/bin/dmconvert",
-        ):
-            result = await convert_danmaku_to_ass(xml, output)
-        assert result is False
+        assert await convert_danmaku_to_ass(xml, output) is False
 
     @pytest.mark.asyncio
-    async def test_success(self, tmp_path: Path) -> None:
+    async def test_writes_a_real_ass_file(self, tmp_path: Path) -> None:
+        """Regression: the conversion must actually produce the ASS file.
+
+        It used to shell out to a ``dmconvert`` binary with flags its CLI does
+        not accept, so the step silently failed even with the option enabled.
+        """
         xml = tmp_path / "danmaku.xml"
-        xml.write_text("<i></i>")
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
         output = tmp_path / "danmaku.ass"
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-
-        with (
-            patch(_DM_FIND, return_value="/usr/bin/dmconvert"),
-            patch(
-                "asyncio.create_subprocess_exec",
-                new_callable=AsyncMock,
-                return_value=mock_proc,
-            ),
-        ):
-            result = await convert_danmaku_to_ass(xml, output)
-        assert result is True
+        assert await convert_danmaku_to_ass(xml, output) is True
+        content = output.read_text(encoding="utf-8")
+        assert "[Script Info]" in content
+        assert "hello" in content
 
     @pytest.mark.asyncio
-    async def test_with_custom_config(self, tmp_path: Path) -> None:
+    async def test_config_reaches_the_output(self, tmp_path: Path) -> None:
         xml = tmp_path / "danmaku.xml"
-        xml.write_text("<i></i>")
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
         output = tmp_path / "danmaku.ass"
-        config = DanmakuToAssConfig(font_size=30, resolution_x=1280)
+        config = DanmakuToAssConfig(font_size=30, resolution_x=1280, resolution_y=720)
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-
-        with (
-            patch(_DM_FIND, return_value="/usr/bin/dmconvert"),
-            patch(
-                "asyncio.create_subprocess_exec",
-                new_callable=AsyncMock,
-                return_value=mock_proc,
-            ) as mock_exec,
-        ):
-            result = await convert_danmaku_to_ass(xml, output, config=config)
-        assert result is True
-        call_args = str(mock_exec.call_args)
-        assert "30" in call_args  # font_size
-        assert "1280x1080" in call_args  # resolution
+        assert await convert_danmaku_to_ass(xml, output, config=config) is True
+        content = output.read_text(encoding="utf-8")
+        assert "PlayResX: 1280" in content
+        assert "PlayResY: 720" in content
 
     @pytest.mark.asyncio
-    async def test_dmconvert_failure(self, tmp_path: Path) -> None:
+    async def test_creates_missing_output_directory(self, tmp_path: Path) -> None:
         xml = tmp_path / "danmaku.xml"
-        xml.write_text("<i></i>")
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+        output = tmp_path / "subs" / "danmaku.ass"
+
+        assert await convert_danmaku_to_ass(xml, output) is True
+        assert output.exists()
+
+    @pytest.mark.asyncio
+    async def test_malformed_xml_fails_without_raising(self, tmp_path: Path) -> None:
+        """A broken XML must not take the whole post-processing item down."""
+        xml = tmp_path / "danmaku.xml"
+        xml.write_text("<i><d p=", encoding="utf-8")
         output = tmp_path / "danmaku.ass"
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 1
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        assert await convert_danmaku_to_ass(xml, output) is False
 
-        with (
-            patch(_DM_FIND, return_value="/usr/bin/dmconvert"),
-            patch(
-                "asyncio.create_subprocess_exec",
-                new_callable=AsyncMock,
-                return_value=mock_proc,
-            ),
-        ):
-            result = await convert_danmaku_to_ass(xml, output)
-        assert result is False
+    @pytest.mark.asyncio
+    async def test_missing_dmconvert_is_reported_not_raised(
+        self, tmp_path: Path
+    ) -> None:
+        xml = tmp_path / "danmaku.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+        output = tmp_path / "danmaku.ass"
+
+        with patch.dict(sys.modules, {"dmconvert": None}):
+            assert await convert_danmaku_to_ass(xml, output) is False
 
     @pytest.mark.asyncio
     async def test_timeout(self, tmp_path: Path) -> None:
         xml = tmp_path / "danmaku.xml"
-        xml.write_text("<i></i>")
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
         output = tmp_path / "danmaku.ass"
 
-        mock_proc = MagicMock()
-        mock_proc.communicate = AsyncMock(side_effect=TimeoutError)
+        async def _never(*_args: object, **_kwargs: object) -> None:
+            await asyncio.sleep(10)
 
-        with (
-            patch(_DM_FIND, return_value="/usr/bin/dmconvert"),
-            patch(
-                "asyncio.create_subprocess_exec",
-                new_callable=AsyncMock,
-                return_value=mock_proc,
-            ),
-        ):
-            result = await convert_danmaku_to_ass(xml, output, timeout=0.001)
+        with patch("asyncio.to_thread", new=_never):
+            result = await convert_danmaku_to_ass(xml, output, timeout=0.01)
         assert result is False
 
 
@@ -730,3 +696,164 @@ class TestPostprocessorExtended:
 
         # Should complete despite delete failure
         assert pp.current_item is None
+
+
+class TestPostprocessorDanmakuConversion:
+    """The danmaku step must survive a broken remux and honour hot updates."""
+
+    async def _run(
+        self,
+        pp: Postprocessor,
+        source: Path,
+        output: Path,
+        related_files: list[Path] | None = None,
+    ) -> None:
+        await pp.start()
+        pp.submit(source, output, related_files=related_files)
+        await asyncio.sleep(0.2)
+        await pp.stop()
+
+    @pytest.mark.asyncio
+    async def test_ass_is_written_for_related_xml(self, tmp_path: Path) -> None:
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=False,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=True,
+        )
+        await self._run(pp, source, tmp_path / "rec.mp4", [xml])
+
+        assert (tmp_path / "rec.ass").exists()
+
+    @pytest.mark.asyncio
+    async def test_ass_survives_a_failing_remux(self, tmp_path: Path) -> None:
+        """Regression: a failed remux used to abort the whole pipeline.
+
+        The danmaku conversion ran after it, so a missing or unhappy ffmpeg cost
+        the user their subtitles too even though the two are unrelated.
+        """
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+
+        completed: list[PostprocessingItem] = []
+        pp = Postprocessor(
+            remux_enabled=True,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=True,
+            on_completed=completed.append,
+        )
+
+        with patch(
+            "birec.postprocess.postprocessor.remux_flv_to_mp4",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            await self._run(pp, source, tmp_path / "rec.mp4", [xml])
+
+        assert completed[0].status == PostprocessingStatus.FAILED
+        assert (tmp_path / "rec.ass").exists()
+
+    @pytest.mark.asyncio
+    async def test_related_danmaku_files_are_kept(self, tmp_path: Path) -> None:
+        """The XML/JSONL the ASS came from must outlive the auto-cleanup."""
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+        raw = tmp_path / "rec.jsonl"
+        raw.write_text("{}\n", encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=False,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=True,
+        )
+        await self._run(pp, source, tmp_path / "rec.mp4", [xml, raw])
+
+        assert xml.exists()
+        assert raw.exists()
+
+    @pytest.mark.asyncio
+    async def test_disabled_conversion_writes_nothing(self, tmp_path: Path) -> None:
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=False,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=False,
+        )
+        await self._run(pp, source, tmp_path / "rec.mp4", [xml])
+
+        assert not (tmp_path / "rec.ass").exists()
+
+    @pytest.mark.asyncio
+    async def test_update_options_reaches_the_running_worker(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: a settings change must apply to an already running task.
+
+        The switches were frozen at construction, so enabling danmaku→ASS only
+        took effect for rooms added afterwards.
+        """
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        xml = tmp_path / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=False,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=False,
+        )
+        pp.update_options(danmaku_to_ass_enabled=True)
+        assert pp.danmaku_to_ass_enabled is True
+
+        await self._run(pp, source, tmp_path / "rec.mp4", [xml])
+
+        assert (tmp_path / "rec.ass").exists()
+
+    def test_update_options_leaves_omitted_switches_alone(self) -> None:
+        config = DanmakuToAssConfig(font_size=30)
+        pp = Postprocessor(
+            remux_enabled=True,
+            inject_metadata_enabled=True,
+            danmaku_to_ass_enabled=True,
+            danmaku_config=config,
+        )
+
+        pp.update_options(remux_enabled=False)
+
+        assert pp.remux_enabled is False
+        assert pp.inject_metadata_enabled is True
+        assert pp.danmaku_to_ass_enabled is True
+        assert pp.danmaku_config is config
+
+    def test_update_options_replaces_the_danmaku_config(self) -> None:
+        pp = Postprocessor()
+        config = DanmakuToAssConfig(font_size=48, resolution_x=1280)
+
+        pp.update_options(danmaku_config=config)
+
+        assert pp.danmaku_config == config
+
+    @pytest.mark.asyncio
+    async def test_completion_listener_can_be_set_late(self, tmp_path: Path) -> None:
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+
+        completed: list[PostprocessingItem] = []
+        pp = Postprocessor(remux_enabled=False, inject_metadata_enabled=False)
+        pp.set_completion_listener(completed.append)
+
+        await self._run(pp, source, tmp_path / "rec.mp4")
+
+        assert [item.status for item in completed] == [PostprocessingStatus.COMPLETED]

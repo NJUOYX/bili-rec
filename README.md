@@ -22,6 +22,8 @@
 | Node.js（仅前端开发） | ≥ 20.19 |
 | pnpm（仅前端开发） | ≥ 9 |
 
+弹幕转 ASS 由 [dmconvert](https://pypi.org/project/dmconvert/) 完成。它是纯 Python 包并已声明为项目依赖，`uv sync` / `pip install` / Docker 构建都会自动装上，无需单独安装外部二进制。
+
 ## 安装
 
 ### 方式一：使用 uv（推荐）

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 
 import aiohttp
 
@@ -15,6 +16,7 @@ from .cover_downloader import CoverDownloader
 from .danmaku_receiver import DanmakuReceiver
 from .flv_stream_recorder_impl import FLVStreamRecorderImpl
 from .metadata_provider import MetadataProvider
+from .models import CompletedSegment
 from .path_provider import PathProvider
 from .raw_danmaku_receiver import RawDanmakuReceiver
 from .statistics import Statistics
@@ -62,6 +64,7 @@ class Recorder(LiveMonitorListener):
         self._stop_task: asyncio.Task[None] | None = None
         self._download_task: asyncio.Task[None] | None = None
         self._flv_impl: FLVStreamRecorderImpl | None = None
+        self._segment_listener: Callable[[CompletedSegment], None] | None = None
 
         # Set up danmaku if provided
         if danmaku_receiver:
@@ -105,6 +108,17 @@ class Recorder(LiveMonitorListener):
     def update_out_dir(self, out_dir: str) -> None:
         """Hot-update the output directory for future recordings."""
         self._path_provider.out_dir = out_dir
+
+    def set_segment_listener(
+        self, listener: Callable[[CompletedSegment], None] | None
+    ) -> None:
+        """Register the callback fired once a segment's files are finalized.
+
+        This is how post-processing learns that a recording is ready: the
+        segment is only ever complete here, after the pipelines are flushed and
+        the danmaku dumpers closed.
+        """
+        self._segment_listener = listener
 
     def on_live_began(self, live: Live) -> None:
         """Called when LiveMonitor detects live start."""
@@ -184,7 +198,22 @@ class Recorder(LiveMonitorListener):
                 await self._download_task
         self._flv_impl = None
         self._download_task = None
-        await self._stream_recorder.stop_recording()
+        segment = await self._stream_recorder.stop_recording()
+        if segment is not None:
+            self._notify_segment_completed(segment)
+
+    def _notify_segment_completed(self, segment: CompletedSegment) -> None:
+        """Hand the finished segment over without letting a listener break stop."""
+        if self._segment_listener is None:
+            return
+        try:
+            self._segment_listener(segment)
+        except Exception:
+            logger.exception(
+                "Room %d: segment listener failed for %s",
+                self._room_id,
+                segment.video_path,
+            )
 
     def _on_stop_done(self, task: asyncio.Task[None]) -> None:
         """Handle stop task completion."""

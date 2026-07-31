@@ -7,6 +7,7 @@ from .danmaku_dumper import DanmakuDumper, DanmakuDumperListener
 from .danmaku_receiver import DanmakuReceiver, DanmakuReceiverListener
 from .metadata_provider import MetadataProvider
 from .models import (
+    CompletedSegment,
     Danmaku,
     DanmakuMessage,
     Gift,
@@ -26,6 +27,7 @@ from .stream_param_holder import StreamParamHolder
 from .stream_recorder import StreamRecorder
 
 __all__ = (
+    "CompletedSegment",
     "CoverDownloader",
     "CoverDownloaderListener",
     "Danmaku",

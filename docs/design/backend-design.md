@@ -42,7 +42,7 @@ bili-rec 是一个面向 Bilibili 直播的**本地录制服务**：自动监控
 | HTML/XML | lxml | 最新稳定 | 弹幕 XML |
 | 直播解压 | brotli / zlib(标准库) | 最新稳定 | 弹幕协议解码 |
 | 媒体处理 | ffmpeg / ffprobe（外部二进制） | 系统提供 | Remux/探测；镜像内置 |
-| 弹幕转字幕 | dmconvert | 最新稳定 | XML→ASS |
+| 弹幕转字幕 | dmconvert（纯 Python 包，进程内调用） | 最新稳定 | XML→ASS；随依赖安装，不依赖 PATH |
 | CLI | Typer | 最新稳定 | |
 | 日志 | loguru | 最新稳定 | |
 | 重试 | tenacity | 最新稳定 | |

@@ -85,8 +85,39 @@ class TestStreamRecorder:
 
     @pytest.mark.asyncio
     async def test_stop_recording_when_not_started(self, recorder):
-        await recorder.stop_recording()  # Should not raise
+        assert await recorder.stop_recording() is None
         assert recorder.is_recording is False
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_reports_the_danmaku_files(self, recorder):
+        """Regression: the segment's danmaku paths must survive the teardown.
+
+        They only live on the dumpers, which the same teardown drops, so read
+        afterwards they come back empty and post-processing gets no XML to
+        convert.
+        """
+        recorder.setup_danmaku(DanmakuReceiver(), RawDanmakuReceiver())
+        await recorder.start_recording()
+
+        segment = await recorder.stop_recording()
+
+        assert segment is not None
+        assert segment.video_path.endswith(".flv")
+        assert segment.danmaku_path.endswith(".xml")
+        assert segment.raw_danmaku_path.endswith(".jsonl")
+        # The paths are now unreachable through the recorder itself.
+        assert recorder.current_danmaku_path == ""
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_without_danmaku_reports_video_only(self, recorder):
+        await recorder.start_recording()
+
+        segment = await recorder.stop_recording()
+
+        assert segment is not None
+        assert segment.video_path.endswith(".flv")
+        assert segment.danmaku_path == ""
+        assert segment.raw_danmaku_path == ""
 
     def test_setup_danmaku(self, recorder):
         dr = DanmakuReceiver()
@@ -244,6 +275,51 @@ class TestRecorder:
         assert recorder.is_recording is False
         assert recorder._download_task is None
         assert recorder._flv_impl is None
+
+    @pytest.mark.asyncio
+    async def test_segment_listener_gets_the_finished_segment(self, recorder):
+        """Regression: a finished segment must be announced to post-processing.
+
+        The recorder is the only place that knows a segment is complete and what
+        it produced; without this callback nothing is ever remuxed or converted.
+        """
+        segments = []
+        recorder.set_segment_listener(segments.append)
+
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        await recorder.stop_recording()
+
+        assert len(segments) == 1
+        assert segments[0].video_path.endswith(".flv")
+
+    @pytest.mark.asyncio
+    async def test_segment_listener_failure_does_not_break_stop(self, recorder):
+        """A broken listener must not leave the recording half torn down."""
+
+        def _boom(_segment):
+            raise RuntimeError("listener exploded")
+
+        recorder.set_segment_listener(_boom)
+
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        await recorder.stop_recording()
+
+        assert recorder.is_recording is False
+        assert recorder._flv_impl is None
+
+    @pytest.mark.asyncio
+    async def test_segment_listener_can_be_detached(self, recorder):
+        segments = []
+        recorder.set_segment_listener(segments.append)
+        recorder.set_segment_listener(None)
+
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        await recorder.stop_recording()
+
+        assert segments == []
 
     def test_with_danmaku(self, tmp_path):
         live = _make_live()
