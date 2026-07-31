@@ -71,6 +71,14 @@ class LiveMonitor(SwitchableMixin, EventEmitter[LiveMonitorListener]):
 
     def _do_disable(self) -> None:
         self._cancel_tasks()
+        # A disabled monitor is not watching, so it no longer knows whether the
+        # room is live and must not keep claiming that it does. Holding the flag
+        # also defeats the check that runs on enable: it only reports a live
+        # room when the monitor believes the room is *not* live, so a stale
+        # ``True`` here meant restarting the monitor never picked a broadcast
+        # back up (#17).
+        self._is_living = False
+        self._stream_available = False
         self._logger.debug("LiveMonitor disabled")
 
     def _cancel_tasks(self) -> None:
