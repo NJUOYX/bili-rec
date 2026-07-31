@@ -11,8 +11,15 @@ import pytest
 
 from birec.bili.live_monitor import LiveMonitor
 from birec.bili.models import LiveStatus, RoomInfo, UserInfo
+from birec.core.models import CompletedSegment
 from birec.core.path_provider import PathProvider
 from birec.core.recorder import Recorder
+from birec.postprocess.danmaku_to_ass import DanmakuToAssConfig
+from birec.postprocess.models import (
+    PostprocessingItem,
+    PostprocessingProgress,
+    PostprocessingStatus,
+)
 from birec.task import (
     DanmakuFileDetail,
     FileStatus,
@@ -42,6 +49,17 @@ def _make_live() -> MagicMock:
     return live
 
 
+def _make_postprocessor() -> MagicMock:
+    """A postprocessor mock that behaves like an idle, running worker."""
+    postprocessor = MagicMock()
+    postprocessor.is_running = False
+    postprocessor.current_item = None
+    postprocessor.queue_size = 0
+    postprocessor.start = AsyncMock()
+    postprocessor.stop = AsyncMock()
+    return postprocessor
+
+
 def _make_components() -> dict[str, MagicMock]:
     """Build mocked task components."""
     live = _make_live()
@@ -59,8 +77,7 @@ def _make_components() -> dict[str, MagicMock]:
     recorder.stream_recorder.current_raw_danmaku_path = ""
     recorder.stream_recorder.real_stream_format = None
     recorder.stream_recorder.real_quality_number = None
-    postprocessor = MagicMock()
-    postprocessor.is_running = False
+    postprocessor = _make_postprocessor()
     return {
         "live": live,
         "danmaku_client": danmaku_client,
@@ -75,6 +92,7 @@ def _make_task(
     room_id: int = 12345,
     enable_monitor: bool = True,
     enable_recorder: bool = True,
+    event_center: MagicMock | None = None,
 ) -> tuple[RecordTask, dict[str, MagicMock]]:
     comps = _make_components()
     task = RecordTask(
@@ -86,6 +104,7 @@ def _make_task(
         comps["postprocessor"],
         enable_monitor=enable_monitor,
         enable_recorder=enable_recorder,
+        event_center=event_center or MagicMock(),
     )
     return task, comps
 
@@ -159,8 +178,32 @@ class TestRecordTaskStatus:
 
     def test_status_remuxing(self) -> None:
         task, comps = _make_task()
-        comps["postprocessor"].is_running = True
+        comps["postprocessor"].current_item = PostprocessingItem(
+            source_path=Path("a.flv"),
+            output_path=Path("a.mp4"),
+            status=PostprocessingStatus.REMUXING,
+        )
         assert task.running_status == RunningStatus.REMUXING
+
+    def test_status_injecting(self) -> None:
+        task, comps = _make_task()
+        comps["postprocessor"].current_item = PostprocessingItem(
+            source_path=Path("a.flv"),
+            output_path=Path("a.mp4"),
+            status=PostprocessingStatus.INJECTING,
+        )
+        assert task.running_status == RunningStatus.INJECTING
+
+    def test_status_ignores_idle_postprocessor(self) -> None:
+        """Regression: the worker runs for the task's whole life.
+
+        Keying "remuxing" off ``is_running`` made every task claim to be
+        post-processing from the moment it was set up.
+        """
+        task, comps = _make_task()
+        comps["postprocessor"].is_running = True
+        comps["postprocessor"].current_item = None
+        assert task.running_status == RunningStatus.STOPPED
 
     def test_status_waiting(self) -> None:
         task, comps = _make_task()
@@ -217,6 +260,190 @@ class TestRecordTaskLifecycle:
         comps["danmaku_client"].stop.assert_awaited_once()
         comps["recorder"].stop.assert_awaited_once()
         comps["monitor"].remove_listener.assert_called_once_with(comps["recorder"])
+
+    async def test_setup_starts_the_postprocessor(self) -> None:
+        """Regression: the queue worker must be running to process anything.
+
+        Nothing ever started it, so every finished segment just piled up in the
+        queue: no remux, and no danmaku XML ever converted to ASS.
+        """
+        task, comps = _make_task()
+        await task.setup()
+        comps["postprocessor"].start.assert_awaited_once()
+
+    async def test_destroy_stops_the_postprocessor_and_unbinds(self) -> None:
+        task, comps = _make_task()
+        await task.destroy()
+        comps["postprocessor"].stop.assert_awaited_once()
+        # The listener must go too, or a torn-down task keeps being fed.
+        comps["recorder"].set_segment_listener.assert_called_with(None)
+
+
+class TestRecordTaskPostprocessingWiring:
+    """A finished segment must reach the postprocessor and the event bus."""
+
+    def _segment_listener(self, comps: dict[str, MagicMock]) -> Callable[..., None]:
+        """The callback the task registered on the recorder."""
+        listener = comps["recorder"].set_segment_listener.call_args[0][0]
+        assert callable(listener)
+        return listener  # type: ignore[no-any-return]
+
+    def test_finished_segment_is_submitted_with_its_danmaku(self) -> None:
+        """Regression: the whole post-processing stage was never wired up.
+
+        The recorder finished a segment and nobody was told, so the XML sitting
+        next to it was never handed over for ASS conversion.
+        """
+        task, comps = _make_task()
+        self._segment_listener(comps)(
+            CompletedSegment(
+                video_path="/rec/a.flv",
+                danmaku_path="/rec/a.xml",
+                raw_danmaku_path="/rec/a.jsonl",
+            )
+        )
+
+        args, kwargs = comps["postprocessor"].submit.call_args
+        assert args == (Path("/rec/a.flv"), Path("/rec/a.mp4"))
+        assert kwargs["related_files"] == [Path("/rec/a.xml"), Path("/rec/a.jsonl")]
+
+    def test_segment_without_danmaku_submits_video_only(self) -> None:
+        task, comps = _make_task()
+        self._segment_listener(comps)(CompletedSegment(video_path="/rec/a.flv"))
+
+        assert comps["postprocessor"].submit.call_args.kwargs["related_files"] == []
+
+    def test_segment_without_video_is_not_submitted(self) -> None:
+        task, comps = _make_task()
+        self._segment_listener(comps)(CompletedSegment(video_path=""))
+
+        comps["postprocessor"].submit.assert_not_called()
+
+    def test_completed_files_are_announced(self) -> None:
+        """The events the WebSocket layer forwards must actually be published."""
+        event_center = MagicMock()
+        task, comps = _make_task(event_center=event_center)
+        self._segment_listener(comps)(
+            CompletedSegment(
+                video_path="/rec/a.flv",
+                danmaku_path="/rec/a.xml",
+                raw_danmaku_path="/rec/a.jsonl",
+            )
+        )
+
+        submitted = [call.args[0] for call in event_center.submit.call_args_list]
+        assert [event.type for event in submitted] == [
+            "VideoFileCompletedEvent",
+            "DanmakuFileCompletedEvent",
+            "RawDanmakuFileCompletedEvent",
+        ]
+        assert submitted[1].data.path == "/rec/a.xml"
+        assert submitted[0].data.room_id == 12345
+
+    def test_postprocessed_item_is_announced(self) -> None:
+        event_center = MagicMock()
+        task, comps = _make_task(event_center=event_center)
+        listener = comps["postprocessor"].set_completion_listener.call_args[0][0]
+
+        listener(
+            PostprocessingItem(
+                source_path=Path("/rec/a.flv"),
+                output_path=Path("/rec/a.mp4"),
+                status=PostprocessingStatus.COMPLETED,
+            )
+        )
+
+        submitted = [call.args[0] for call in event_center.submit.call_args_list]
+        assert [event.type for event in submitted] == [
+            "VideoPostprocessingCompletedEvent",
+            "PostprocessingCompletedEvent",
+        ]
+        assert submitted[1].data.files == ["/rec/a.mp4"]
+
+    def test_failed_item_is_not_reported_as_produced(self) -> None:
+        event_center = MagicMock()
+        task, comps = _make_task(event_center=event_center)
+        listener = comps["postprocessor"].set_completion_listener.call_args[0][0]
+
+        listener(
+            PostprocessingItem(
+                source_path=Path("/rec/a.flv"),
+                output_path=Path("/rec/a.mp4"),
+                status=PostprocessingStatus.FAILED,
+            )
+        )
+
+        event_center.submit.assert_not_called()
+
+    def test_batch_event_waits_for_the_queue_to_drain(self) -> None:
+        """The batch event lists a whole run, so it must not fire mid-queue."""
+        event_center = MagicMock()
+        task, comps = _make_task(event_center=event_center)
+        listener = comps["postprocessor"].set_completion_listener.call_args[0][0]
+        comps["postprocessor"].queue_size = 1
+
+        listener(
+            PostprocessingItem(
+                source_path=Path("/rec/a.flv"),
+                output_path=Path("/rec/a.mp4"),
+                status=PostprocessingStatus.COMPLETED,
+            )
+        )
+
+        types = [call.args[0].type for call in event_center.submit.call_args_list]
+        assert types == ["VideoPostprocessingCompletedEvent"]
+
+        comps["postprocessor"].queue_size = 0
+        listener(
+            PostprocessingItem(
+                source_path=Path("/rec/b.flv"),
+                output_path=Path("/rec/b.mp4"),
+                status=PostprocessingStatus.COMPLETED,
+            )
+        )
+
+        batch = event_center.submit.call_args_list[-1].args[0]
+        assert batch.type == "PostprocessingCompletedEvent"
+        assert batch.data.files == ["/rec/a.mp4", "/rec/b.mp4"]
+
+    def test_update_postprocessing_reaches_the_worker(self) -> None:
+        """Regression: settings changes must apply to an already running task."""
+        task, comps = _make_task()
+        config = DanmakuToAssConfig(font_size=48)
+
+        task.update_postprocessing(danmaku_to_ass_enabled=True, danmaku_config=config)
+
+        comps["postprocessor"].update_options.assert_called_once_with(
+            remux_enabled=None,
+            inject_metadata_enabled=None,
+            danmaku_to_ass_enabled=True,
+            danmaku_config=config,
+        )
+
+    def test_get_data_reports_the_item_in_flight(self) -> None:
+        """Regression: the postprocessing status fields were never filled in."""
+        task, comps = _make_task()
+        item = PostprocessingItem(
+            source_path=Path("/rec/a.flv"),
+            output_path=Path("/rec/a.mp4"),
+            status=PostprocessingStatus.REMUXING,
+        )
+        item.progress = PostprocessingProgress(
+            status=PostprocessingStatus.REMUXING, percent=42.0
+        )
+        comps["postprocessor"].current_item = item
+
+        status = task.get_data().task_status
+        assert status.postprocessor_status == "remuxing"
+        assert status.postprocessing_path == "/rec/a.flv"
+        assert status.postprocessing_progress == 42.0
+
+    def test_get_data_is_blank_while_idle(self) -> None:
+        task, _ = _make_task()
+        status = task.get_data().task_status
+        assert status.postprocessor_status == ""
+        assert status.postprocessing_path == ""
+        assert status.postprocessing_progress == 0.0
 
 
 class TestRecordTaskControl:
@@ -578,8 +805,7 @@ class TestEventDrivenRecording:
         danmaku_client = MagicMock()
         danmaku_client.start = AsyncMock()
         danmaku_client.stop = AsyncMock()
-        postprocessor = MagicMock()
-        postprocessor.is_running = False
+        postprocessor = _make_postprocessor()
 
         task = RecordTask(
             12345,
@@ -621,8 +847,7 @@ class TestEventDrivenRecording:
         danmaku_client = MagicMock()
         danmaku_client.start = AsyncMock()
         danmaku_client.stop = AsyncMock()
-        postprocessor = MagicMock()
-        postprocessor.is_running = False
+        postprocessor = _make_postprocessor()
 
         task = RecordTask(
             12345,

@@ -7,13 +7,31 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+from ..core.models import CompletedSegment
+from ..event import (
+    DanmakuFileCompletedEvent,
+    DanmakuFileCompletedEventData,
+    EventCenter,
+    PostprocessingCompletedEvent,
+    PostprocessingCompletedEventData,
+    RawDanmakuFileCompletedEvent,
+    RawDanmakuFileCompletedEventData,
+    VideoFileCompletedEvent,
+    VideoFileCompletedEventData,
+    VideoPostprocessingCompletedEvent,
+    VideoPostprocessingCompletedEventData,
+)
+from ..postprocess.models import PostprocessingItem, PostprocessingStatus
 
 if TYPE_CHECKING:
     from ..bili.danmaku_client import DanmakuClient
     from ..bili.live import Live
     from ..bili.live_monitor import LiveMonitor
     from ..core.recorder import Recorder
+    from ..postprocess.danmaku_to_ass import DanmakuToAssConfig
     from ..postprocess.postprocessor import Postprocessor
     from ..space import SpaceMonitor, SpaceReclaimer
 
@@ -163,6 +181,7 @@ class RecordTask:
         *,
         enable_monitor: bool = True,
         enable_recorder: bool = True,
+        event_center: EventCenter | None = None,
     ) -> None:
         self._room_id = room_id
         self._live = live
@@ -172,6 +191,12 @@ class RecordTask:
         self._postprocessor = postprocessor
         self._monitor_enabled = enable_monitor
         self._recorder_enabled = enable_recorder
+        self._event_center = event_center or EventCenter.get_instance()
+        self._postprocessed_files: list[str] = []
+        # Close the loop between recording and post-processing: the recorder is
+        # the only place that knows a segment is finished and what it produced.
+        recorder.set_segment_listener(self._on_segment_completed)
+        postprocessor.set_completion_listener(self._on_postprocessing_completed)
 
     @property
     def room_id(self) -> int:
@@ -206,11 +231,84 @@ class RecordTask:
         """Derive the running status from the underlying components."""
         if self._recorder.is_recording:
             return RunningStatus.RECORDING
-        if self._postprocessor.is_running:
+        # The worker runs for as long as the task exists, so only an item
+        # actually in flight means post-processing is happening.
+        item = self._postprocessor.current_item
+        if item is not None:
+            if item.status is PostprocessingStatus.INJECTING:
+                return RunningStatus.INJECTING
             return RunningStatus.REMUXING
         if self._monitor_enabled and self._monitor.is_living:
             return RunningStatus.WAITING
         return RunningStatus.STOPPED
+
+    # ── post-processing wiring ───────────────────────────────────
+
+    def _on_segment_completed(self, segment: CompletedSegment) -> None:
+        """Announce a finished segment and queue it for post-processing (§3.3)."""
+        self._emit_file_completed_events(segment)
+        if not segment.video_path:
+            return
+        video = Path(segment.video_path)
+        related = [
+            Path(path)
+            for path in (segment.danmaku_path, segment.raw_danmaku_path)
+            if path
+        ]
+        self._postprocessor.submit(
+            video, video.with_suffix(".mp4"), related_files=related
+        )
+
+    def _emit_file_completed_events(self, segment: CompletedSegment) -> None:
+        """Publish one completed-file event per file the segment produced."""
+        if segment.video_path:
+            self._event_center.submit(
+                VideoFileCompletedEvent.from_data(
+                    VideoFileCompletedEventData(
+                        room_id=self._room_id, path=segment.video_path
+                    )
+                )
+            )
+        if segment.danmaku_path:
+            self._event_center.submit(
+                DanmakuFileCompletedEvent.from_data(
+                    DanmakuFileCompletedEventData(
+                        room_id=self._room_id, path=segment.danmaku_path
+                    )
+                )
+            )
+        if segment.raw_danmaku_path:
+            self._event_center.submit(
+                RawDanmakuFileCompletedEvent.from_data(
+                    RawDanmakuFileCompletedEventData(
+                        room_id=self._room_id, path=segment.raw_danmaku_path
+                    )
+                )
+            )
+
+    def _on_postprocessing_completed(self, item: PostprocessingItem) -> None:
+        """Publish the post-processing events once an item leaves the queue.
+
+        The per-video event fires for every successful item; the batch event
+        only once the queue has drained, listing everything it produced.
+        """
+        if item.status is PostprocessingStatus.COMPLETED:
+            self._postprocessed_files.append(str(item.output_path))
+            self._event_center.submit(
+                VideoPostprocessingCompletedEvent.from_data(
+                    VideoPostprocessingCompletedEventData(
+                        room_id=self._room_id, path=str(item.output_path)
+                    )
+                )
+            )
+        if self._postprocessor.queue_size == 0 and self._postprocessed_files:
+            files = self._postprocessed_files
+            self._postprocessed_files = []
+            self._event_center.submit(
+                PostprocessingCompletedEvent.from_data(
+                    PostprocessingCompletedEventData(room_id=self._room_id, files=files)
+                )
+            )
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
@@ -224,6 +322,10 @@ class RecordTask:
         """
         await self._live.init()
         await self._fetch_danmu_info()
+        # The postprocessor is a queue worker: unless it is running, everything
+        # a finished segment submits just sits in the queue, so no recording
+        # would ever be remuxed or have its danmaku converted.
+        await self._postprocessor.start()
         if self._monitor_enabled:
             await self._start_monitoring()
         if not self._recorder_enabled:
@@ -243,6 +345,8 @@ class RecordTask:
         self._monitor.remove_listener(self._recorder)
         await self._danmaku_client.stop()
         await self._recorder.stop()
+        self._recorder.set_segment_listener(None)
+        await self._postprocessor.stop()
 
     # ── monitor control ──────────────────────────────────────────────────
 
@@ -295,6 +399,26 @@ class RecordTask:
         """Propagate an output directory change to the underlying recorder."""
         self._recorder.update_out_dir(out_dir)
 
+    def update_postprocessing(
+        self,
+        *,
+        remux_enabled: bool | None = None,
+        inject_metadata_enabled: bool | None = None,
+        danmaku_to_ass_enabled: bool | None = None,
+        danmaku_config: DanmakuToAssConfig | None = None,
+    ) -> None:
+        """Propagate a post-processing settings change to the running worker.
+
+        Without this a task keeps the switches it was built with, so turning
+        e.g. danmaku→ASS on only takes effect for rooms added afterwards.
+        """
+        self._postprocessor.update_options(
+            remux_enabled=remux_enabled,
+            inject_metadata_enabled=inject_metadata_enabled,
+            danmaku_to_ass_enabled=danmaku_to_ass_enabled,
+            danmaku_config=danmaku_config,
+        )
+
     # ── data ─────────────────────────────────────────────────────────────
 
     def get_data(self) -> TaskData:
@@ -303,6 +427,7 @@ class RecordTask:
         user_info = self._live.user_info
         stream_recorder = self._recorder.stream_recorder
         stats = stream_recorder.statistics
+        item = self._postprocessor.current_item
         status = TaskStatus(
             monitor_enabled=self._monitor_enabled,
             recorder_enabled=self._recorder_enabled,
@@ -319,6 +444,9 @@ class RecordTask:
             recording_path=stream_recorder.current_video_path,
             real_stream_format=stream_recorder.real_stream_format or "",
             real_quality_number=stream_recorder.real_quality_number or 0,
+            postprocessor_status=item.status.value if item else "",
+            postprocessing_path=str(item.source_path) if item else "",
+            postprocessing_progress=item.progress.percent if item else 0.0,
         )
         return TaskData(
             room_id=self._room_id,
