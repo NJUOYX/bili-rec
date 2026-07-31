@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from birec.bili.exceptions import ApiRequestError
 from birec.task import (
     DanmakuFileDetail,
     FileStatus,
@@ -319,6 +320,26 @@ class TestAddTask:
         resp = client.post("/api/v1/tasks/3001", json={"room_id": 3001})
         body = resp.json()
         assert body["code"] == 500
+
+    def test_add_reports_an_api_error_instead_of_raising(
+        self, client: TestClient, task_manager: RecordTaskManager
+    ) -> None:
+        """Regression: Bilibili refusing the room must be an answer, not a 500.
+
+        ``ApiRequestError`` is neither a ``ValueError`` nor a ``RuntimeError``,
+        the two this handler caught, so it escaped into the framework and the
+        caller got a bare server error instead of the ``{code, message}`` shape
+        every other endpoint keeps to.
+        """
+        failing = _make_mock_task(2003)
+        failing.setup = AsyncMock(side_effect=ApiRequestError(-400, "room not found"))
+        task_manager._task_factory = MagicMock(return_value=failing)
+
+        body = client.post("/api/v1/tasks/2003", json={"room_id": 2003}).json()
+
+        assert body["code"] == 502
+        assert "room not found" in body["message"]
+        assert 2003 not in task_manager._tasks
 
     def test_add_forwards_auto_enable(
         self, client: TestClient, task_manager: RecordTaskManager
