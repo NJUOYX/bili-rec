@@ -395,6 +395,8 @@ bili-rec/
   3. 磁盘不足触发回收（临时小配额目录）。
   4. 后处理链路：对样例 FLV **真实调用 ffmpeg** 完成 Remux→MP4 + 弹幕→ASS，断言产物与删源（标记 `@pytest.mark.ffmpeg`，CI 安装 ffmpeg）。
 - **API/WS 系统测试**：FastAPI `TestClient`/httpx `ASGITransport` 覆盖全部端点的正常/错误码路径；WebSocket 订阅收到事件；OpenAPI 契约快照测试。
+- **故障注入**：`FaultConfig`（`tests/system/fake_bili_server.py`）让假服务器按脚本出错——录到一半掐断连接、把非 FLV 字节掺进流里、接口报错或发呆、广播 socket 握完手就挂断、不回心跳、用 deflate/brotli 包弹幕。故障一律放在服务端，被测的录制器保持真实，它要应付的就是一个行为恶劣的 socket。共用脚手架在 `tests/system/harness.py`。
+- **未接线功能用 strict xfail 钉住**：实现完整但在 `src` 里没有调用者的能力（HLS 下载循环、多 CDN 回退、弹幕计数、磁盘监控、心跳应答校验）各有一条 `@pytest.mark.xfail(strict=True)`。接线当天它会由 XPASS 变成失败，提醒把标记摘掉。
 
 ### 11.4 覆盖率与门禁
 - 目标：整体行覆盖 **≥ 80%**，核心模块（bili/core/flv/postprocess/task）**≥ 85%**。
