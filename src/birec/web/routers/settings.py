@@ -59,12 +59,19 @@ async def patch_settings(request: Request) -> dict[str, Any]:
 
     # Hot-update output directory on existing tasks so that future recordings
     # land in the new location immediately (fixes #6).
-    output_patch = settings_in.model_dump(exclude_none=True).get("output")
+    patch_data = settings_in.model_dump(exclude_none=True)
+    output_patch = patch_data.get("output")
     if output_patch and "out_dir" in output_patch:
         new_out_dir: str = current.output.out_dir
         task_manager = request.app.state.task_manager
         for task in task_manager.get_all_tasks():
             task.update_out_dir(new_out_dir)
+
+    # Same for the post-processing switches: a task keeps the ones it was built
+    # with, so without this turning danmaku→ASS on would only apply to rooms
+    # added afterwards.
+    if patch_data.get("postprocessing"):
+        request.app.state.application.refresh_postprocessing_options()
 
     data = manager.get_settings().model_dump(
         mode="json", exclude_none=True, by_alias=True
@@ -105,7 +112,8 @@ async def patch_task_settings(request: Request, room_id: int) -> dict[str, Any]:
         ).to_dict()
 
     # Apply non-None option fields to the task settings
-    for section_name, section_value in options.model_dump(exclude_none=True).items():
+    option_patch = options.model_dump(exclude_none=True)
+    for section_name, section_value in option_patch.items():
         if isinstance(section_value, dict):
             task_section = getattr(task_settings, section_name)
             for k, v in section_value.items():
@@ -119,6 +127,10 @@ async def patch_task_settings(request: Request, room_id: int) -> dict[str, Any]:
         task_settings.enable_recorder = bool(body["enable_recorder"])
 
     manager.dump()
+
+    # Reach the task that is already running, not just the next one built.
+    if option_patch.get("postprocessing"):
+        request.app.state.application.refresh_postprocessing_options()
 
     data = task_settings.model_dump(mode="json", by_alias=True)
     return ResponseMessage(message="Task settings updated", data=data).to_dict()

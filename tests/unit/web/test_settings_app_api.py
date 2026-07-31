@@ -140,6 +140,45 @@ class TestPatchSettings:
         for t in mock_tasks:
             t.update_out_dir.assert_called_once_with("/another/path")
 
+    async def test_patch_postprocessing_propagates_to_existing_tasks(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        """Regression: enabling danmaku→ASS must reach already running tasks.
+
+        The switches were resolved when the task was built, so without this the
+        option only took effect for rooms added after the change.
+        """
+        task_manager = app.state.task_manager
+        mock_task = MagicMock()
+        mock_task.room_id = 12345
+        task_manager._tasks[12345] = mock_task
+
+        resp = await client.patch(
+            "/api/v1/settings",
+            json={"postprocessing": {"danmaku_to_ass": True}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["code"] == 0
+
+        kwargs = mock_task.update_postprocessing.call_args.kwargs
+        assert kwargs["danmaku_to_ass_enabled"] is True
+
+    async def test_patch_unrelated_section_leaves_tasks_alone(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        """Only a post-processing change should touch the running workers."""
+        task_manager = app.state.task_manager
+        mock_task = MagicMock()
+        mock_task.room_id = 12345
+        task_manager._tasks[12345] = mock_task
+
+        await client.patch(
+            "/api/v1/settings",
+            json={"recorder": {"quality_number": 400}},
+        )
+
+        mock_task.update_postprocessing.assert_not_called()
+
 
 class TestTaskSettings:
     async def test_get_task_settings_not_found(self, client: AsyncClient) -> None:
@@ -156,6 +195,63 @@ class TestTaskSettings:
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 404
+
+    async def test_patch_task_settings_applies_the_override(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        app.state.settings_manager.add_task_settings(12345)
+
+        resp = await client.patch(
+            "/api/v1/settings/tasks/12345",
+            json={"postprocessing": {"danmaku_to_ass": True}},
+        )
+
+        assert resp.json()["code"] == 0
+        task_settings = app.state.settings_manager.find_task_settings(12345)
+        assert task_settings.postprocessing.danmaku_to_ass is True
+
+    async def test_patch_task_postprocessing_propagates_to_the_task(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        """Regression: a task-level override must reach the running worker too."""
+        app.state.settings_manager.add_task_settings(12345)
+        mock_task = MagicMock()
+        mock_task.room_id = 12345
+        app.state.task_manager._tasks[12345] = mock_task
+
+        await client.patch(
+            "/api/v1/settings/tasks/12345",
+            json={"postprocessing": {"danmaku_to_ass": True}},
+        )
+
+        kwargs = mock_task.update_postprocessing.call_args.kwargs
+        assert kwargs["danmaku_to_ass_enabled"] is True
+
+    async def test_patch_task_toggles_are_applied(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        app.state.settings_manager.add_task_settings(12345)
+
+        await client.patch(
+            "/api/v1/settings/tasks/12345",
+            json={"enable_monitor": False, "enable_recorder": False},
+        )
+
+        task_settings = app.state.settings_manager.find_task_settings(12345)
+        assert task_settings.enable_monitor is False
+        assert task_settings.enable_recorder is False
+
+    async def test_patch_task_settings_rejects_a_bad_body(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        app.state.settings_manager.add_task_settings(12345)
+
+        resp = await client.patch(
+            "/api/v1/settings/tasks/12345",
+            json={"recorder": {"quality_number": "not-a-number"}},
+        )
+
+        assert resp.json()["code"] == 422
 
 
 # ── App endpoints ────────────────────────────────────────────────────────────
