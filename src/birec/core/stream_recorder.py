@@ -30,6 +30,7 @@ from .cover_downloader import CoverDownloader
 from .danmaku_dumper import DanmakuDumper
 from .danmaku_receiver import DanmakuReceiver
 from .metadata_provider import MetadataProvider
+from .models import CompletedSegment
 from .operators.stream_statistics import StreamStatistics
 from .path_provider import PathProvider
 from .raw_danmaku_dumper import RawDanmakuDumper
@@ -269,10 +270,15 @@ class StreamRecorder:
         logger.info("Recording started: %s", video_path)
         return video_path
 
-    async def stop_recording(self) -> None:
-        """Stop the current recording segment."""
+    async def stop_recording(self) -> CompletedSegment | None:
+        """Stop the current recording segment.
+
+        Returns:
+            The files this segment produced, or ``None`` when no recording was
+            in progress.
+        """
         if not self._is_recording:
-            return
+            return None
 
         self._is_recording = False
         self._statistics.stop()
@@ -282,6 +288,14 @@ class StreamRecorder:
         self._finalize_flv_pipeline()
         self.finalize_hls_pipeline()
         self._active_pipeline = None
+
+        # Read the danmaku paths before the dumpers go away: they are the only
+        # place those paths are kept, so afterwards they are unrecoverable.
+        segment = CompletedSegment(
+            video_path=self._current_video_path,
+            danmaku_path=self.current_danmaku_path,
+            raw_danmaku_path=self.current_raw_danmaku_path,
+        )
 
         # Finalize danmaku
         if self._danmaku_dumper:
@@ -298,6 +312,7 @@ class StreamRecorder:
             self._current_video_path,
             self.format_size(self._statistics.file_size),
         )
+        return segment
 
     async def download_cover(self, cover_url: str) -> None:
         """Download cover image if cover downloader is set up."""
