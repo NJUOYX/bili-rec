@@ -13,7 +13,6 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-import pytest
 from httpx import AsyncClient
 
 from .fake_bili_server import FakeBiliServer
@@ -150,20 +149,14 @@ class TestDanmakuReachesTheRecording:
         assert content.rstrip().endswith("</i>")
         assert "last words" in content
 
-    @pytest.mark.xfail(
-        reason="Statistics.update_danmu has no caller, so the count stays 0",
-        strict=True,
-    )
     async def test_the_api_reports_how_many_danmaku_arrived(
         self, client: AsyncClient, fake_server: FakeBiliServer, out_dir: Path
     ) -> None:
-        """The danmaku counter should follow what is being received.
+        """Regression: the counter has to follow what is being received.
 
-        It does not move: nothing in ``src`` ever calls ``update_danmu``, so the
-        dashboard shows 0 no matter how busy the room is. The messages really do
-        arrive — they are in the XML — only the counter never hears about it.
-
-        Strict, so it turns green once the counter is connected.
+        Nothing ever called ``update_danmu``, so the dashboard showed 0 however
+        busy the room was. The messages really did arrive — they were in the XML
+        — only the counter never heard about it.
         """
         await connected_task(client)
         await begin_live(client, fake_server)
