@@ -400,6 +400,16 @@ class StreamRecorder:
         # last complete tag; everything before it is safe to release.
         self._flv_buffer.discard_consumed()
 
+    def discard_partial_stream(self) -> None:
+        """Forget the tail of a connection that ended before its last tag did.
+
+        Called when the download is about to reconnect. Each connection carries
+        one whole FLV document, so a fragment left over from the previous one
+        has nothing to be completed by.
+        """
+        if self._flv_buffer is not None:
+            self._flv_buffer.discard_unparsed()
+
     def complete_flv_pipeline(self) -> None:
         """Signal completion of the FLV data stream."""
         if self._flv_source is not None:

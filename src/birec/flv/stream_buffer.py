@@ -37,6 +37,20 @@ class StreamBuffer:
         del self._buf[:consumed]
         self._origin = self._pos
 
+    def discard_unparsed(self) -> None:
+        """Drop the bytes after the current read position.
+
+        For when the stream restarts. A connection can die anywhere, including
+        halfway through a tag, and what it left behind belongs to a document
+        that has ended. The bytes arriving next are the start of a new one, so
+        splicing them onto the fragment would leave the parser reading a tag
+        length out of two unrelated streams and misaligned from there on.
+        """
+        keep = self._pos - self._origin
+        if keep < 0 or keep >= len(self._buf):
+            return
+        del self._buf[keep:]
+
     @property
     def buffered(self) -> int:
         """Number of bytes currently retained in memory."""

@@ -94,8 +94,15 @@ class FLVStreamRecorderImpl:
         """Resolve URL, fetch, and feed data in a retry loop."""
         sr = self._stream_recorder
         params = self._stream_params
+        first_attempt = True
 
         while self._running:
+            # Anything the previous connection left half-written belongs to a
+            # document that has ended; the next one starts its own.
+            if not first_attempt:
+                sr.discard_partial_stream()
+            first_attempt = False
+
             # 1. Resolve stream URL
             try:
                 url = await self._url_resolver.resolve(
