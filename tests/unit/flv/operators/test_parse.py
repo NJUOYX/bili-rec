@@ -229,19 +229,55 @@ class TestParseResumable:
         assert len(end_tags) == 1
         assert len(results) == before_completion + 1
 
-    def test_a_second_flv_header_mid_stream_is_a_stream_error(self) -> None:
-        """Regression: junk in the stream must stay an FLV error, not escape.
+    def test_a_second_flv_header_continues_the_same_recording(self) -> None:
+        """Regression: a reconnect must not cost the rest of the recording.
 
-        A reconnect can put a fresh ``FLV`` magic where a tag header is
-        expected. ``0x46`` masks down to tag type 6, which no enum accepts, and
-        the constructor raises a bare ``ValueError`` — not an ``FlvDataError``,
-        so the parser's own handling never saw it. It escaped the FLV layer
-        entirely and reached the download loop's catch-all, taking the whole
-        fetch down instead of being handled as the corrupted stream it is.
+        One HTTP connection is one FLV document, so a live download that
+        reconnects — which it does, repeatedly, over hours — hands the parser a
+        second file header in the middle of the byte stream. That header used to
+        be read where a tag was expected: ``0x46`` masks down to tag type 6,
+        which no enum accepts, so the stream was declared corrupt and the
+        subscription ended. Downloading carried on, the byte counter carried on,
+        and not one further byte reached the disk — the file simply stopped
+        growing while the UI still said "recording".
+
+        The header is consumed instead, and the tags behind it are recorded as
+        part of the same file.
         """
-        # Enough bytes after the magic for a whole tag header to be read, so the
-        # parser commits to it rather than waiting for more data.
-        junk = b"FLV\x01\x05\x00\x00\x00\x09" + b"\x00" * 20
+        first = make_flv_bytes(tags=[make_video_tag(timestamp=0)])
+        # A whole second document, exactly as a reconnected CDN sends it.
+        second = make_flv_bytes(tags=[make_video_tag(timestamp=40, body=b"\x02" * 8)])
+        buffer = StreamBuffer()
+        source: Subject[RandomIO] = Subject()
+
+        results: list[FLVStreamItem] = []
+        errors: list[Exception] = []
+        source.pipe(parse(resumable=True)).subscribe(
+            on_next=results.append,
+            on_error=errors.append,
+        )
+
+        buffer.append(first + second)
+        source.on_next(buffer)
+
+        assert errors == []
+        # Only the first header reaches the file; a second one written into the
+        # middle of a recording is not something a player can read.
+        assert len([i for i in results if isinstance(i, FlvHeader)]) == 1
+        tags = [i for i in results if isinstance(i, FlvTag)]
+        assert len(tags) == 2, "the tags after the reconnect were dropped"
+        assert tags[1].body == b"\x02" * 8
+
+    def test_junk_where_a_tag_header_belongs_is_a_stream_error(self) -> None:
+        """Bytes that are neither a tag nor a new document are corruption.
+
+        Tolerating the reconnect header must not turn into tolerating anything:
+        a byte that cannot be a tag type still ends the stream, and it does so
+        as an FLV error rather than a bare ``ValueError`` escaping the layer.
+        """
+        # Tag type 0 is not one FLV defines, with enough bytes behind it that
+        # the parser commits rather than waiting for more.
+        junk = b"\x00" * 24
         data = make_flv_bytes(tags=[make_video_tag()]) + junk
         buffer = StreamBuffer()
         source: Subject[RandomIO] = Subject()
