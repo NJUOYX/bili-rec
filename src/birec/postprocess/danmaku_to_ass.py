@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ("DanmakuToAssConfig", "convert_danmaku_to_ass", "find_dmconvert")
+__all__ = ("DanmakuToAssConfig", "convert_danmaku_to_ass")
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +22,6 @@ class DanmakuToAssConfig:
     resolution_y: int = 1080
 
 
-def find_dmconvert() -> str | None:
-    """Find dmconvert executable path.
-
-    Returns:
-        Path to dmconvert or None if not found.
-    """
-    return shutil.which("dmconvert")
-
-
 async def convert_danmaku_to_ass(
     xml_path: Path,
     output_path: Path,
@@ -41,18 +31,24 @@ async def convert_danmaku_to_ass(
 ) -> bool:
     """Convert danmaku XML to ASS subtitle using dmconvert.
 
+    dmconvert is a pure-Python library and a declared dependency, so it is
+    called in-process rather than through its console script: that removes the
+    need for it to be on ``PATH`` and keeps the argument list from drifting away
+    from the one its CLI accepts.
+
     Args:
         xml_path: Source danmaku XML file.
         output_path: Output ASS file path.
         config: Conversion configuration.
-        timeout: Maximum processing time.
+        timeout: Maximum time to wait for the conversion.
 
     Returns:
         True if successful.
     """
-    dmconvert = find_dmconvert()
-    if dmconvert is None:
-        logger.warning("dmconvert not found, skipping ASS conversion")
+    try:
+        from dmconvert import convert_xml_to_ass
+    except ImportError:
+        logger.warning("dmconvert is not installed, skipping ASS conversion")
         return False
 
     if not xml_path.exists():
@@ -64,45 +60,30 @@ async def convert_danmaku_to_ass(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        dmconvert,
-        "-f",
-        "xml",
-        "--font-size",
-        str(config.font_size),
-        "--sc-font-size",
-        str(config.sc_font_size),
-        "--resolution",
-        f"{config.resolution_x}x{config.resolution_y}",
-        "-o",
-        str(output_path),
-        str(xml_path),
-    ]
-
-    logger.debug("Converting danmaku to ASS: %s", " ".join(cmd))
+    logger.debug("Converting danmaku to ASS: %s -> %s", xml_path, output_path)
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        # The conversion parses the whole XML and is CPU-bound, so it goes to a
+        # worker thread to keep the event loop responsive. A timeout only stops
+        # us waiting; the thread itself cannot be interrupted.
+        await asyncio.wait_for(
+            asyncio.to_thread(
+                convert_xml_to_ass,
+                config.font_size,
+                config.sc_font_size,
+                config.resolution_x,
+                config.resolution_y,
+                str(xml_path),
+                str(output_path),
+            ),
+            timeout=timeout,
         )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-
-        if proc.returncode != 0:
-            logger.error(
-                "dmconvert failed (code %d): %s",
-                proc.returncode,
-                stderr.decode(errors="replace")[-500:],
-            )
-            return False
-
-        logger.debug("Converted %s -> %s", xml_path, output_path)
-        return True
-
     except TimeoutError:
-        logger.error("dmconvert timed out after %.0fs", timeout)
+        logger.error("Danmaku conversion timed out after %.0fs", timeout)
         return False
-    except OSError as e:
-        logger.error("Failed to run dmconvert: %s", e)
+    except Exception:
+        logger.exception("Failed to convert danmaku to ASS: %s", xml_path)
         return False
+
+    logger.debug("Converted %s -> %s", xml_path, output_path)
+    return True

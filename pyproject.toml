@@ -25,6 +25,7 @@ dependencies = [
     "tqdm",
     "tomli-w",
     "lxml-html-clean>=0.4.5",
+    "dmconvert>=0.0.4",
 ]
 
 [project.scripts]
