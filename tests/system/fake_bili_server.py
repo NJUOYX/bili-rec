@@ -526,6 +526,12 @@ class FakeBiliServer:
         The chunking is the point: tags land split across writes, which is the
         shape of the data the parser actually has to cope with in production.
         """
+        if request.method == "HEAD":
+            # The monitor probes the stream URL for reachability once a second.
+            # Answering without a body keeps those probes out of the download
+            # counters, which a test reads to count reconnects.
+            return web.Response(headers={"Content-Type": "video/x-flv"})
+
         self.stream_requests += 1
         attempt = self.stream_requests
         resp = web.StreamResponse(
