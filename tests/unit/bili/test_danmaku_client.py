@@ -362,6 +362,24 @@ class TestConnectionState:
         client = _make_client()
         assert client.connected is False
 
+    def test_an_unauthenticated_socket_does_not_count_as_connected(self) -> None:
+        """Regression: an accepted socket is not yet a working connection.
+
+        ``connected`` only looked at whether the socket was open, so a server
+        that accepted the connection and then refused the handshake — a stale
+        token, say — was reported as connected while delivering nothing. The
+        room looked fine and silently received no danmaku at all.
+        """
+        client = _make_client()
+        ws = MagicMock()
+        ws.closed = False
+        client._ws = ws
+
+        assert client.connected is False
+
+        client._authenticated = True
+        assert client.connected is True
+
     def test_set_danmu_info(self) -> None:
         client = _make_client()
         client.set_danmu_info(["host1.com", "host2.com"], "token123")

@@ -81,6 +81,7 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
 
         # Connection state
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._authenticated: bool = False
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._retry_count: int = 0
@@ -100,7 +101,13 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
 
     @property
     def connected(self) -> bool:
-        return self._ws is not None and not self._ws.closed
+        """Whether the socket is open *and* has been through the handshake.
+
+        A socket the server accepted but refused to authenticate delivers
+        nothing at all, so counting it as connected describes a room that looks
+        fine and silently receives no danmaku for the rest of the broadcast.
+        """
+        return self._ws is not None and not self._ws.closed and self._authenticated
 
     # --- Cookie / UA hot-swap ---
 
@@ -170,6 +177,7 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()
         self._ws = None
+        self._authenticated = False
 
     # --- Connection Loop with Reconnect ---
 
@@ -241,6 +249,7 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
             headers["Cookie"] = self._cookie
 
         self._ws = await self._session.ws_connect(url, headers=headers)
+        self._authenticated = False
         self._logger.debug("WebSocket connected to {}", host)
 
         # Send auth packet
@@ -250,6 +259,7 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
         await self._wait_auth_reply()
 
         # Connected successfully
+        self._authenticated = True
         self._retry_count = 0
         await self._emit("danmaku_connected")
 
@@ -267,6 +277,7 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
                 ):
                     break
         finally:
+            self._authenticated = False
             await self._emit("danmaku_disconnected")
             if self._heartbeat_task is not None:
                 self._heartbeat_task.cancel()
