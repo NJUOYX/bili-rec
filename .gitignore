@@ -43,3 +43,6 @@ htmlcov/
 
 # Frontend build copied in by the release pipeline, never committed
 src/birec/web/static/
+
+# mutmut writes the mutated copy of the tree here
+mutants/

@@ -1,0 +1,41 @@
+name: Mutation
+
+# Coverage says a line ran; this says breaking that line gets noticed. The suite
+# sat at 86% coverage while shipping nine "claims to record, writes nothing"
+# bugs, so this job measures what coverage cannot (方案 3 of #19).
+#
+# The gate is a ratchet against tests/mutation_baseline.json: it passes at
+# today's 570 survivors and fails only if that number grows. Clearing them is a
+# long job; letting new ones in is not allowed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    # Roughly 1200 mutants, each running only the tests that cover it.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: ./scripts/mutation.sh
+      - name: Upload the surviving mutants
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-results
+          path: |
+            mutants/results.txt
+            mutants/mutmut-cicd-stats.json
+          if-no-files-found: warn
