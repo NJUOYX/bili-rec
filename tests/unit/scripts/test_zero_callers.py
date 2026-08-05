@@ -196,6 +196,11 @@ class TestWhitelist:
 class TestTheRealTree:
     def test_current_src_is_clean(self) -> None:
         """Pin the repo state: main passes with the checked-in whitelist."""
+        if not (REPO_ROOT / ".git").exists():
+            pytest.skip(
+                "not the real checkout (e.g. mutmut's mutants/ sandbox copy, "
+                "whose tree is deliberately modified)"
+            )
         result = zc.run(
             REPO_ROOT / "src" / "birec",
             REPO_ROOT / "scripts" / "zero_callers_whitelist.txt",
