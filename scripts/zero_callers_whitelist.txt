@@ -31,7 +31,6 @@ birec.hls.operators.segment_fetcher.SegmentFetcher.fetch_init  # HLS engine help
 # ── Known gaps: wired-looking code that production never reaches ─────
 # Surfaced by the first run of this check. Each one is a B-class candidate
 # and should be wired (then delete the entry) or deliberately removed.
-birec.bili.live_monitor.LiveMonitor.handle_command  # gap: DanmakuReceiver drops LIVE/PREPARING/ROOM_CHANGE commands, so nothing forwards them here; live detection in production relies on periodic polling alone, and only tests call this directly
 birec.bili.live_monitor.LiveMonitor.repair_state_on_reconnect  # gap: meant to run when the danmaku client reconnects, but nothing calls it
 birec.logging.configure_logging.configure_logger  # gap: log-file configuration exists but no entrypoint applies it
 birec.postprocess.metadata.inject_metadata  # gap: postprocessor step 3 sets INJECTING status and then does nothing — the inject_metadata_enabled setting is accepted but never acts

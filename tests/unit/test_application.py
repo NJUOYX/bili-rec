@@ -132,6 +132,25 @@ class TestTaskFactory:
         assert receiver is not None
         assert receiver in task._danmaku_client._listeners  # noqa: SLF001
 
+    async def test_factory_forwards_live_commands_to_the_monitor(
+        self, application: Application
+    ) -> None:
+        """Room-state commands off the socket must reach the monitor (#27).
+
+        Without this wire the monitor learns about a broadcast beginning or
+        ending from the periodic check alone — a whole check interval late.
+        """
+        await application.startup()
+        try:
+            task = application._create_task(23058)  # noqa: SLF001
+        finally:
+            await application.shutdown()
+
+        receiver = task.recorder.stream_recorder._danmaku_receiver  # noqa: SLF001
+        assert receiver is not None
+        handler = receiver._live_command_handler  # noqa: SLF001
+        assert handler == task.monitor.handle_command
+
     async def test_raw_danmaku_receiver_follows_the_setting(
         self, application: Application
     ) -> None:

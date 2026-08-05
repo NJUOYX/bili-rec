@@ -263,7 +263,11 @@ class Application:
         # The receivers are the danmaku client's listeners: the client only
         # broadcasts, so without this registration nothing would ever reach the
         # dumpers and the .xml/.jsonl files would stay empty (§3.3).
-        danmaku_receiver = DanmakuReceiver()
+        # The receiver also forwards the room-state commands (LIVE/PREPARING/
+        # ROOM_CHANGE) to the monitor — the instant begin/end channel. The
+        # periodic check only backs it up; on its own it would learn about a
+        # transition a whole check interval late (#27).
+        danmaku_receiver = DanmakuReceiver(live_command_handler=monitor.handle_command)
         danmaku_client.add_listener(danmaku_receiver)
         save_raw = _pick(
             task.danmaku.save_raw_danmaku if task else None,
