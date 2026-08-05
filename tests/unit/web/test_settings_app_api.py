@@ -180,6 +180,32 @@ class TestPatchSettings:
 
         mock_task.update_postprocessing.assert_not_called()
 
+    async def test_patch_logging_triggers_refresh(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        """Changing logging settings must re-configure the logger (#29)."""
+        application = app.state.application
+        with patch.object(application, "refresh_logging") as mock_refresh:
+            resp = await client.patch(
+                "/api/v1/settings",
+                json={"logging": {"console_log_level": "DEBUG"}},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["code"] == 0
+            mock_refresh.assert_called_once()
+
+    async def test_patch_non_logging_section_skips_refresh(
+        self, client: AsyncClient, app: Any
+    ) -> None:
+        """Only a logging change should trigger refresh_logging."""
+        application = app.state.application
+        with patch.object(application, "refresh_logging") as mock_refresh:
+            await client.patch(
+                "/api/v1/settings",
+                json={"recorder": {"quality_number": 400}},
+            )
+            mock_refresh.assert_not_called()
+
 
 class TestTaskSettings:
     async def test_get_task_settings_not_found(self, client: AsyncClient) -> None:

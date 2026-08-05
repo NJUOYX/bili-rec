@@ -32,7 +32,6 @@ birec.hls.operators.segment_fetcher.SegmentFetcher.fetch_init  # HLS engine help
 # Surfaced by the first run of this check. Each one is a B-class candidate
 # and should be wired (then delete the entry) or deliberately removed.
 birec.bili.live_monitor.LiveMonitor.repair_state_on_reconnect  # gap: meant to run when the danmaku client reconnects, but nothing calls it
-birec.logging.configure_logging.configure_logger  # gap: log-file configuration exists but no entrypoint applies it
 birec.postprocess.metadata.MediaMetadata.to_description_json  # belongs to the dead metadata-injection path
 
 # ── Framework surface: invoked by the framework, never by a name in src ──

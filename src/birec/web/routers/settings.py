@@ -73,6 +73,11 @@ async def patch_settings(request: Request) -> dict[str, Any]:
     if patch_data.get("postprocessing"):
         request.app.state.application.refresh_postprocessing_options()
 
+    # Logging changes (log_dir, console_log_level, backup_count) take effect
+    # immediately so the user does not have to restart the server (#29).
+    if patch_data.get("logging"):
+        request.app.state.application.refresh_logging()
+
     data = manager.get_settings().model_dump(
         mode="json", exclude_none=True, by_alias=True
     )
