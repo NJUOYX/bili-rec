@@ -275,3 +275,61 @@ class TestConfiguredTasks:
             ) == [100, 23058]
         finally:
             await application.shutdown()
+
+
+class TestLoggingConfiguration:
+    """The logger must be configured at startup so file sinks are active (#29)."""
+
+    async def test_startup_creates_log_file(self, application: Application) -> None:
+        """After startup, a log file must exist in the configured directory."""
+        from loguru import logger
+
+        await application.startup()
+        try:
+            logger.info("startup-log-marker")
+            logger.complete()
+            log_files = list(application.log_dir.glob("birec_*.log"))
+            assert log_files, "No log file created in log_dir after startup"
+        finally:
+            await application.shutdown()
+
+    async def test_startup_survives_configure_logger_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """Exception isolation: a bad log_dir must not crash the application."""
+        from unittest.mock import patch
+
+        app = Application(
+            config_path=tmp_path / "config.toml",
+            output_dir=tmp_path / "recordings",
+            log_dir=tmp_path / "logs",
+        )
+        with patch(
+            "birec.application.configure_logger",
+            side_effect=OSError("simulated permission denied"),
+        ):
+            # Must not raise — the app starts with console-only logging.
+            await app.startup()
+            try:
+                assert app.is_started
+            finally:
+                await app.shutdown()
+
+    async def test_refresh_logging_reapplies_settings(
+        self, application: Application
+    ) -> None:
+        """A settings PATCH that changes logging must re-configure the logger."""
+        from loguru import logger
+
+        await application.startup()
+        try:
+            # Change the console level and ask for a re-apply.
+            application.settings_manager.settings.logging.console_log_level = "DEBUG"
+            application.refresh_logging()
+            # A log file should still be present (idempotent re-configure).
+            logger.info("refresh-log-marker")
+            logger.complete()
+            log_files = list(application.log_dir.glob("birec_*.log"))
+            assert log_files
+        finally:
+            await application.shutdown()
