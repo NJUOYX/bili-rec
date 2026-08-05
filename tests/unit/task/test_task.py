@@ -934,6 +934,401 @@ class TestEventDrivenRecording:
         assert recorder.is_recording is False
         await task.destroy()
 
+
+class TestTaskMutationKillers:
+    """Targeted tests to kill surviving mutants in birec.task."""
+
+    # ── enable_monitor / disable_monitor precision ────────────────────
+
+    async def test_enable_monitor_sets_flag_before_starting(self) -> None:
+        task, comps = _make_task(enable_monitor=False)
+        assert task.monitor_enabled is False
+        await task.enable_monitor()
+        assert task._monitor_enabled is True
+        comps["danmaku_client"].start.assert_awaited_once()
+        comps["monitor"].enable.assert_called_once()
+
+    async def test_disable_monitor_sets_flag_and_stops_all(self) -> None:
+        task, comps = _make_task(enable_monitor=True)
+        assert task._monitor_enabled is True
+        await task.disable_monitor()
+        assert task._monitor_enabled is False
+        comps["monitor"].disable.assert_called_once()
+        comps["danmaku_client"].stop.assert_awaited_once()
+        comps["recorder"].stop_recording.assert_awaited_once()
+
+    async def test_disable_monitor_idempotent(self) -> None:
+        task, comps = _make_task(enable_monitor=False)
+        await task.disable_monitor()
+        comps["monitor"].disable.assert_not_called()
+        comps["danmaku_client"].stop.assert_not_awaited()
+
+    # ── enable_recorder / disable_recorder precision ──────────────────
+
+    def test_enable_recorder_sets_flag_and_adds_listener(self) -> None:
+        task, comps = _make_task(enable_recorder=False)
+        assert task._recorder_enabled is False
+        task.enable_recorder()
+        assert task._recorder_enabled is True
+        comps["monitor"].add_listener.assert_called_once_with(comps["recorder"])
+
+    def test_enable_recorder_idempotent(self) -> None:
+        task, comps = _make_task(enable_recorder=True)
+        task.enable_recorder()
+        comps["monitor"].add_listener.assert_not_called()
+
+    async def test_disable_recorder_sets_flag_removes_and_stops(self) -> None:
+        task, comps = _make_task(enable_recorder=True)
+        assert task._recorder_enabled is True
+        await task.disable_recorder()
+        assert task._recorder_enabled is False
+        comps["monitor"].remove_listener.assert_called_once_with(comps["recorder"])
+        comps["recorder"].stop_recording.assert_awaited_once()
+
+    async def test_disable_recorder_idempotent(self) -> None:
+        task, comps = _make_task(enable_recorder=False)
+        await task.disable_recorder()
+        comps["monitor"].remove_listener.assert_not_called()
+        comps["recorder"].stop_recording.assert_not_awaited()
+
+    # ── _rollback_task precision ──────────────────────────────────────
+
+    async def test_rollback_destroys_task_and_removes_config(self) -> None:
+        removed: list[int] = []
+        task, _ = _make_task(room_id=777)
+        task.destroy = AsyncMock()  # type: ignore[method-assign]
+        mgr = RecordTaskManager(
+            on_task_removed=lambda rid: removed.append(rid),
+        )
+        await mgr._rollback_task(task, 777, registered=True)
+        task.destroy.assert_awaited_once()  # type: ignore[attr-defined]
+        assert removed == [777]
+
+    async def test_rollback_does_not_remove_unregistered_config(self) -> None:
+        removed: list[int] = []
+        task, _ = _make_task(room_id=888)
+        task.destroy = AsyncMock()  # type: ignore[method-assign]
+        mgr = RecordTaskManager(
+            on_task_removed=lambda rid: removed.append(rid),
+        )
+        await mgr._rollback_task(task, 888, registered=False)
+        task.destroy.assert_awaited_once()  # type: ignore[attr-defined]
+        assert removed == []
+
+    async def test_rollback_without_on_task_removed_callback(self) -> None:
+        task, _ = _make_task(room_id=999)
+        task.destroy = AsyncMock()  # type: ignore[method-assign]
+        mgr = RecordTaskManager()
+        # Should not raise even without on_task_removed
+        await mgr._rollback_task(task, 999, registered=True)
+        task.destroy.assert_awaited_once()  # type: ignore[attr-defined]
+
+    async def test_rollback_swallows_destroy_exception(self) -> None:
+        task, _ = _make_task(room_id=111)
+        task.destroy = AsyncMock(side_effect=RuntimeError("teardown failed"))  # type: ignore[method-assign]
+        removed: list[int] = []
+        mgr = RecordTaskManager(
+            on_task_removed=lambda rid: removed.append(rid),
+        )
+        # Should not raise
+        await mgr._rollback_task(task, 111, registered=True)
+        assert removed == [111]
+
+    # ── remove_task precision ─────────────────────────────────────────
+
+    async def test_remove_task_calls_on_task_removed(self) -> None:
+        removed: list[int] = []
+
+        def factory(room_id: int) -> RecordTask:
+            t, _ = _make_task(room_id=room_id)
+            t.setup = AsyncMock()  # type: ignore[method-assign]
+            t.destroy = AsyncMock()  # type: ignore[method-assign]
+            return t
+
+        mgr = RecordTaskManager(
+            factory, on_task_removed=lambda rid: removed.append(rid)
+        )
+        await mgr.add_task(42)
+        await mgr.remove_task(42)
+        assert mgr.task_count == 0
+        assert removed == [42]
+
+    async def test_remove_task_without_callback(self) -> None:
+        def factory(room_id: int) -> RecordTask:
+            t, _ = _make_task(room_id=room_id)
+            t.setup = AsyncMock()  # type: ignore[method-assign]
+            t.destroy = AsyncMock()  # type: ignore[method-assign]
+            return t
+
+        mgr = RecordTaskManager(factory)
+        await mgr.add_task(42)
+        await mgr.remove_task(42)
+        assert mgr.task_count == 0
+
+    # ── _get_or_raise precision ───────────────────────────────────────
+
+    async def test_get_or_raise_returns_task(self) -> None:
+        def factory(room_id: int) -> RecordTask:
+            t, _ = _make_task(room_id=room_id)
+            t.setup = AsyncMock()  # type: ignore[method-assign]
+            t.destroy = AsyncMock()  # type: ignore[method-assign]
+            return t
+
+        mgr = RecordTaskManager(factory)
+        await mgr.add_task(55)
+        task = mgr._get_or_raise(55)
+        assert task.room_id == 55
+
+    def test_get_or_raise_raises_key_error(self) -> None:
+        mgr = RecordTaskManager()
+        with pytest.raises(KeyError, match="No task for room 999"):
+            mgr._get_or_raise(999)
+
+    # ── load_tasks precision ──────────────────────────────────────────
+
+    async def test_load_tasks_skips_existing(self) -> None:
+        call_count = 0
+
+        def factory(room_id: int) -> RecordTask:
+            nonlocal call_count
+            call_count += 1
+            t, _ = _make_task(room_id=room_id)
+            t.setup = AsyncMock()  # type: ignore[method-assign]
+            t.destroy = AsyncMock()  # type: ignore[method-assign]
+            return t
+
+        mgr = RecordTaskManager(factory)
+        await mgr.load_tasks([1, 2])
+        assert call_count == 2
+        await mgr.load_tasks([1, 2, 3])
+        # Only room 3 is new
+        assert call_count == 3
+        assert mgr.task_count == 3
+
+    # ── fetch_danmu_info precision ────────────────────────────────────
+
+    async def test_fetch_danmu_info_filters_empty_hosts(self) -> None:
+        task, comps = _make_task()
+        comps["live"].api.get_danmu_info = AsyncMock(
+            return_value={
+                "host_list": [
+                    {"host": "a.example.com", "wss_port": 2243},
+                    {"host": ""},
+                    {"host": "b.example.com", "wss_port": 443},
+                ],
+                "token": "tok123",
+            }
+        )
+        await task._fetch_danmu_info()
+        comps["danmaku_client"].set_danmu_info.assert_called_once_with(
+            ["a.example.com", "b.example.com"], "tok123", ports=[2243, 443]
+        )
+
+    async def test_fetch_danmu_info_default_port(self) -> None:
+        task, comps = _make_task()
+        comps["live"].api.get_danmu_info = AsyncMock(
+            return_value={
+                "host_list": [{"host": "c.example.com"}],
+                "token": "tok",
+            }
+        )
+        await task._fetch_danmu_info()
+        comps["danmaku_client"].set_danmu_info.assert_called_once_with(
+            ["c.example.com"], "tok", ports=[443]
+        )
+
+    async def test_fetch_danmu_info_empty_token(self) -> None:
+        task, comps = _make_task()
+        comps["live"].api.get_danmu_info = AsyncMock(
+            return_value={"host_list": [{"host": "h.com", "wss_port": 443}]}
+        )
+        await task._fetch_danmu_info()
+        comps["danmaku_client"].set_danmu_info.assert_called_once_with(
+            ["h.com"], "", ports=[443]
+        )
+
+    # ── __init__ wiring precision ─────────────────────────────────────
+
+    def test_init_registers_segment_listener(self) -> None:
+        task, comps = _make_task()
+        comps["recorder"].set_segment_listener.assert_called_once()
+        listener = comps["recorder"].set_segment_listener.call_args[0][0]
+        assert callable(listener)
+
+    def test_init_registers_segment_started_listener(self) -> None:
+        task, comps = _make_task()
+        comps["recorder"].set_segment_started_listener.assert_called_once()
+        listener = comps["recorder"].set_segment_started_listener.call_args[0][0]
+        assert callable(listener)
+
+    def test_init_registers_cover_listener(self) -> None:
+        task, comps = _make_task()
+        comps["recorder"].set_cover_listener.assert_called_once()
+        listener = comps["recorder"].set_cover_listener.call_args[0][0]
+        assert callable(listener)
+
+    def test_init_registers_postprocessor_listener(self) -> None:
+        task, comps = _make_task()
+        comps["postprocessor"].set_completion_listener.assert_called_once()
+
+    # ── get_data field precision ──────────────────────────────────────
+
+    def test_get_data_recording_path(self) -> None:
+        task, comps = _make_task()
+        comps["recorder"].stream_recorder.current_video_path = "/rec/live.flv"
+        data = task.get_data()
+        assert data.task_status.recording_path == "/rec/live.flv"
+
+    def test_get_data_monitor_and_recorder_flags(self) -> None:
+        task, _ = _make_task(enable_monitor=True, enable_recorder=False)
+        data = task.get_data()
+        assert data.task_status.monitor_enabled is True
+        assert data.task_status.recorder_enabled is False
+
+    def test_get_data_running_status_reflected(self) -> None:
+        task, comps = _make_task()
+        comps["recorder"].is_recording = True
+        data = task.get_data()
+        assert data.task_status.running_status == RunningStatus.RECORDING
+
+
+class TestRecordTaskGetParam:
+    """get_param returns the configuration snapshot — every field matters."""
+
+    def test_get_param_defaults(self) -> None:
+        task, _ = _make_task(room_id=99999)
+        param = task.get_param()
+        assert param.room_id == 99999
+        assert param.enable_monitor is True
+        assert param.enable_recorder is True
+
+    def test_get_param_monitor_disabled(self) -> None:
+        task, _ = _make_task(enable_monitor=False)
+        param = task.get_param()
+        assert param.enable_monitor is False
+        assert param.enable_recorder is True
+
+    def test_get_param_recorder_disabled(self) -> None:
+        task, _ = _make_task(enable_recorder=False)
+        param = task.get_param()
+        assert param.enable_monitor is True
+        assert param.enable_recorder is False
+
+    def test_get_param_both_disabled(self) -> None:
+        task, _ = _make_task(enable_monitor=False, enable_recorder=False)
+        param = task.get_param()
+        assert param.room_id == 12345
+        assert param.enable_monitor is False
+        assert param.enable_recorder is False
+
+    def test_get_param_reflects_runtime_toggle(self) -> None:
+        task, _ = _make_task(enable_monitor=True, enable_recorder=True)
+        task.enable_recorder()  # already enabled, no-op
+        param = task.get_param()
+        assert param.enable_recorder is True
+
+
+class TestRecordTaskGetMetadata:
+    """get_metadata returns room/user metadata — every field must be precise."""
+
+    def test_get_metadata_with_info(self) -> None:
+        task, comps = _make_task(room_id=54321)
+        comps["live"].room_info = RoomInfo(
+            room_id=54321,
+            short_room_id=111,
+            area_id=2,
+            title="My Stream",
+            area_name="Music",
+            parent_area_id=1,
+            parent_area_name="Entertainment",
+            live_status=LiveStatus.LIVE,
+            live_start_time=1700000000,
+            online=500,
+            cover="https://img.example.com/cover.jpg",
+            tags="tag1",
+            description="desc",
+            uid=42,
+        )
+        comps["live"].user_info = UserInfo(
+            uid=42, name="Streamer_X", gender="female", face=""
+        )
+        meta = task.get_metadata()
+        assert meta.room_id == 54321
+        assert meta.user_name == "Streamer_X"
+        assert meta.room_title == "My Stream"
+        assert meta.area == "Music"
+        assert meta.parent_area == "Entertainment"
+        assert meta.live_start_time == 1700000000
+        assert meta.cover_url == "https://img.example.com/cover.jpg"
+
+    def test_get_metadata_no_room_info(self) -> None:
+        task, comps = _make_task(room_id=11111)
+        comps["live"].room_info = None
+        comps["live"].user_info = UserInfo(uid=1, name="U", gender="", face="")
+        meta = task.get_metadata()
+        assert meta.room_id == 11111
+        assert meta.user_name == "U"
+        assert meta.room_title == ""
+        assert meta.area == ""
+        assert meta.parent_area == ""
+        assert meta.live_start_time == 0
+        assert meta.cover_url == ""
+
+    def test_get_metadata_no_user_info(self) -> None:
+        task, comps = _make_task(room_id=22222)
+        comps["live"].room_info = RoomInfo(
+            room_id=22222,
+            short_room_id=0,
+            area_id=3,
+            title="Room Title",
+            area_name="Dance",
+            parent_area_id=1,
+            parent_area_name="Life",
+            live_status=LiveStatus.PREPARING,
+            live_start_time=0,
+            online=0,
+            cover="https://img.example.com/c.png",
+            tags="",
+            description="",
+            uid=7,
+        )
+        comps["live"].user_info = None
+        meta = task.get_metadata()
+        assert meta.room_id == 22222
+        assert meta.user_name == ""
+        assert meta.room_title == "Room Title"
+        assert meta.area == "Dance"
+        assert meta.parent_area == "Life"
+        assert meta.live_start_time == 0
+        assert meta.cover_url == "https://img.example.com/c.png"
+
+    def test_get_metadata_both_none(self) -> None:
+        task, comps = _make_task(room_id=33333)
+        comps["live"].room_info = None
+        comps["live"].user_info = None
+        meta = task.get_metadata()
+        assert meta.room_id == 33333
+        assert meta.user_name == ""
+        assert meta.room_title == ""
+        assert meta.area == ""
+        assert meta.parent_area == ""
+        assert meta.live_start_time == 0
+        assert meta.cover_url == ""
+
+
+class TestRecordTaskUpdateOutDir:
+    """update_out_dir delegates to the recorder."""
+
+    def test_update_out_dir_delegates(self) -> None:
+        task, comps = _make_task()
+        task.update_out_dir("/new/output/dir")
+        comps["recorder"].update_out_dir.assert_called_once_with("/new/output/dir")
+
+    def test_update_out_dir_empty_string(self) -> None:
+        task, comps = _make_task()
+        task.update_out_dir("")
+        comps["recorder"].update_out_dir.assert_called_once_with("")
+
     async def test_recorder_disabled_does_not_record(self, tmp_path: Path) -> None:
         live = _make_live()
         monitor = LiveMonitor(live)

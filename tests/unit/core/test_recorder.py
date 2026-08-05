@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -488,3 +489,427 @@ class TestRecorder:
             danmaku_receiver=dr,
         )
         assert recorder.stream_recorder._danmaku_receiver is dr
+
+    def test_on_live_stream_available_logs(self, recorder):
+        """on_live_stream_available must log the room id."""
+        with patch("birec.core.recorder.logger") as mock_logger:
+            recorder.on_live_stream_available(recorder._live)
+        mock_logger.debug.assert_called_once_with(
+            "Room %d: stream URL available", 12345
+        )
+
+    def test_on_live_stream_reset_logs(self, recorder):
+        """on_live_stream_reset must log the room id."""
+        with patch("birec.core.recorder.logger") as mock_logger:
+            recorder.on_live_stream_reset(recorder._live)
+        mock_logger.debug.assert_called_once_with("Room %d: stream reset", 12345)
+
+    def test_on_live_stream_available_does_not_change_state(self, recorder):
+        """Stream-available is informational; recording state stays unchanged."""
+        assert recorder.is_recording is False
+        recorder.on_live_stream_available(recorder._live)
+        assert recorder.is_recording is False
+
+    def test_on_live_stream_reset_does_not_change_state(self, recorder):
+        """Stream-reset is informational; recording state stays unchanged."""
+        assert recorder.is_recording is False
+        recorder.on_live_stream_reset(recorder._live)
+        assert recorder.is_recording is False
+
+
+class TestRecorderMutationKillers:
+    """Targeted tests to kill surviving mutants in birec.core.recorder."""
+
+    @pytest.fixture
+    def recorder(self, tmp_path):
+        live = _make_live()
+        monitor = MagicMock(spec=LiveMonitor)
+        monitor.add_listener = MagicMock()
+        monitor.remove_listener = MagicMock()
+        session = MagicMock()
+        pp = PathProvider(str(tmp_path), "{roomid}")
+        return Recorder(
+            room_id=12345,
+            live=live,
+            monitor=monitor,
+            session=session,
+            path_provider=pp,
+        )
+
+    # ── __init__ mutants ──────────────────────────────────────────────
+
+    def test_init_registers_as_monitor_listener(self, recorder):
+        recorder._monitor.add_listener.assert_called_once_with(recorder)
+
+    def test_init_statistics_is_fresh(self, recorder):
+        assert recorder.statistics.dl_total == 0
+        assert recorder.statistics.dl_rate == 0.0
+        assert recorder.statistics.rec_elapsed == 0.0
+
+    def test_init_internal_tasks_are_none(self, recorder):
+        assert recorder._start_task is None
+        assert recorder._stop_task is None
+        assert recorder._download_task is None
+        assert recorder._flv_impl is None
+        assert recorder._cover_task is None
+
+    def test_init_listeners_are_none(self, recorder):
+        assert recorder._segment_listener is None
+        assert recorder._segment_started_listener is None
+        assert recorder._cover_listener is None
+
+    # ── update_info mutants ───────────────────────────────────────────
+
+    def test_update_info_delegates_to_path_provider(self, recorder):
+        room = _make_room_info()
+        user = _make_user_info()
+        recorder.update_info(room, user)
+        # Path provider should have the info now
+        assert recorder._path_provider._room_info is room
+        assert recorder._path_provider._user_info is user
+
+    def test_update_info_delegates_to_metadata_provider(self, recorder):
+        room = _make_room_info()
+        user = _make_user_info()
+        recorder.update_info(room, user)
+        assert recorder._metadata_provider._room_info is room
+        assert recorder._metadata_provider._user_info is user
+
+    def test_update_info_with_none(self, recorder):
+        recorder.update_info(None, None)
+        assert recorder._path_provider._room_info is None
+
+    # ── set_cover_listener mutants ────────────────────────────────────
+
+    def test_set_cover_listener(self, recorder):
+        cb = MagicMock()
+        recorder.set_cover_listener(cb)
+        assert recorder._cover_listener is cb
+
+    def test_set_cover_listener_none(self, recorder):
+        recorder.set_cover_listener(MagicMock())
+        recorder.set_cover_listener(None)
+        assert recorder._cover_listener is None
+
+    # ── on_live_began mutants ─────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_on_live_began_resets_and_starts_statistics(self, recorder):
+        recorder._statistics.update_dl(999)
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.01)
+        # Statistics must have been reset then started
+        assert recorder._statistics.dl_total == 0
+        assert recorder._statistics._start_time is not None
+        await recorder.stop()
+
+    @pytest.mark.asyncio
+    async def test_on_live_began_updates_info_before_paths(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.01)
+        # update_info was called with the live's room/user info
+        assert recorder._path_provider._room_info is not None
+        await recorder.stop()
+
+    @pytest.mark.asyncio
+    async def test_on_live_began_creates_start_task(self, recorder):
+        recorder.on_live_began(recorder._live)
+        assert recorder._start_task is not None
+        await asyncio.sleep(0.05)
+        assert recorder._start_task.done()
+        await recorder.stop()
+
+    # ── _on_start_done mutants ────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_on_start_done_cancelled_is_noop(self, recorder):
+        recorder.on_live_began(recorder._live)
+        task = recorder._start_task
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        # Recorder should still think it's recording (cancelled = ignored)
+        assert recorder.is_recording is True
+        await recorder.stop()
+
+    @pytest.mark.asyncio
+    async def test_on_start_done_exception_stops_recording(self, recorder):
+        """If _start_recording_async raises, recording must be marked false."""
+        recorder._stream_recorder.start_recording = AsyncMock(
+            side_effect=RuntimeError("boom")
+        )
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder.is_recording is False
+        assert recorder._statistics._start_time is None
+
+    # ── _on_download_done mutants ─────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_on_download_done_cancelled_is_noop(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder._download_task is not None
+        recorder._download_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await recorder._download_task
+        await asyncio.sleep(0.01)
+        # Cancelled download should not trigger stop
+        await recorder.stop()
+
+    @pytest.mark.asyncio
+    async def test_on_download_done_not_recording_is_noop(self, recorder):
+        """If recording already stopped, download done should not re-stop."""
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        await recorder.stop_recording()
+        # After stop_recording, _is_recording is False
+        assert recorder.is_recording is False
+
+    # ── on_live_ended mutants ─────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_on_live_ended_stops_statistics(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder._statistics._start_time is not None
+        recorder.on_live_ended(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder.is_recording is False
+        assert recorder._statistics._start_time is None
+
+    @pytest.mark.asyncio
+    async def test_on_live_ended_creates_stop_task(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        recorder.on_live_ended(recorder._live)
+        assert recorder._stop_task is not None
+        await asyncio.sleep(0.05)
+
+    def test_on_live_ended_when_not_recording_is_noop(self, recorder):
+        recorder.on_live_ended(recorder._live)
+        assert recorder._stop_task is None
+
+    # ── _stop_recording_async mutants ─────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_async_cleans_up_all_tasks(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder._flv_impl is not None
+        assert recorder._download_task is not None
+
+        recorder.on_live_ended(recorder._live)
+        await asyncio.sleep(0.1)
+
+        assert recorder._flv_impl is None
+        assert recorder._download_task is None
+        assert recorder._cover_task is None
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_async_notifies_segment_listener(self, recorder):
+        segments = []
+        recorder.set_segment_listener(segments.append)
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        recorder.on_live_ended(recorder._live)
+        await asyncio.sleep(0.1)
+        assert len(segments) == 1
+        assert segments[0].video_path.endswith(".flv")
+
+    # ── _download_cover_async mutants ─────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_download_cover_no_room_info(self, recorder):
+        recorder._live.room_info = None
+        recorder.set_cover_listener(MagicMock())
+        await recorder._download_cover_async()
+        recorder._cover_listener.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_download_cover_empty_cover_url(self, recorder):
+        recorder._live.room_info = _make_room_info().model_copy(update={"cover": ""})
+        recorder.set_cover_listener(MagicMock())
+        await recorder._download_cover_async()
+        recorder._cover_listener.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_download_cover_success_calls_listener(self, recorder):
+        recorder._live.room_info = _make_room_info()
+        recorder._stream_recorder.download_cover = AsyncMock(
+            return_value="/tmp/cover.jpg"
+        )
+        listener = MagicMock()
+        recorder.set_cover_listener(listener)
+        await recorder._download_cover_async()
+        listener.assert_called_once_with("/tmp/cover.jpg")
+
+    @pytest.mark.asyncio
+    async def test_download_cover_no_listener(self, recorder):
+        recorder._live.room_info = _make_room_info()
+        recorder._stream_recorder.download_cover = AsyncMock(
+            return_value="/tmp/cover.jpg"
+        )
+        recorder.set_cover_listener(None)
+        # Should not raise
+        await recorder._download_cover_async()
+
+    @pytest.mark.asyncio
+    async def test_download_cover_exception_is_swallowed(self, recorder):
+        recorder._live.room_info = _make_room_info()
+        recorder._stream_recorder.download_cover = AsyncMock(
+            side_effect=OSError("network down")
+        )
+        listener = MagicMock()
+        recorder.set_cover_listener(listener)
+        await recorder._download_cover_async()
+        listener.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_download_cover_listener_exception_is_swallowed(self, recorder):
+        recorder._live.room_info = _make_room_info()
+        recorder._stream_recorder.download_cover = AsyncMock(
+            return_value="/tmp/cover.jpg"
+        )
+
+        def _boom(_path):
+            raise RuntimeError("listener exploded")
+
+        recorder.set_cover_listener(_boom)
+        # Should not raise
+        await recorder._download_cover_async()
+
+    @pytest.mark.asyncio
+    async def test_download_cover_returns_none_path(self, recorder):
+        recorder._live.room_info = _make_room_info()
+        recorder._stream_recorder.download_cover = AsyncMock(return_value="")
+        listener = MagicMock()
+        recorder.set_cover_listener(listener)
+        await recorder._download_cover_async()
+        listener.assert_not_called()
+
+    # ── _notify_segment_started mutants ───────────────────────────────
+
+    def test_notify_segment_started_no_listener(self, recorder):
+        from birec.core.models import StartedSegment
+
+        seg = StartedSegment(video_path="/tmp/a.flv")
+        recorder.set_segment_started_listener(None)
+        # Should not raise
+        recorder._notify_segment_started(seg)
+
+    def test_notify_segment_started_listener_exception_swallowed(self, recorder):
+        from birec.core.models import StartedSegment
+
+        seg = StartedSegment(video_path="/tmp/a.flv")
+
+        def _boom(_s):
+            raise ValueError("oops")
+
+        recorder.set_segment_started_listener(_boom)
+        # Should not raise
+        recorder._notify_segment_started(seg)
+
+    # ── _notify_segment_completed mutants ─────────────────────────────
+
+    def test_notify_segment_completed_no_listener(self, recorder):
+        from birec.core.models import CompletedSegment
+
+        seg = CompletedSegment(video_path="/tmp/a.flv")
+        recorder.set_segment_listener(None)
+        recorder._notify_segment_completed(seg)
+
+    def test_notify_segment_completed_listener_exception_swallowed(self, recorder):
+        from birec.core.models import CompletedSegment
+
+        seg = CompletedSegment(video_path="/tmp/a.flv")
+
+        def _boom(_s):
+            raise ValueError("oops")
+
+        recorder.set_segment_listener(_boom)
+        recorder._notify_segment_completed(seg)
+
+    # ── _on_stop_done mutants ─────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_on_stop_done_cancelled_is_noop(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        recorder.on_live_ended(recorder._live)
+        await asyncio.sleep(0.01)
+        # If stop task exists, cancel it
+        if recorder._stop_task and not recorder._stop_task.done():
+            recorder._stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await recorder._stop_task
+
+    @pytest.mark.asyncio
+    async def test_on_stop_done_exception_is_logged(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        # Make stop_recording raise
+        recorder._stream_recorder.stop_recording = AsyncMock(
+            side_effect=RuntimeError("stop failed")
+        )
+        recorder.on_live_ended(recorder._live)
+        await asyncio.sleep(0.1)
+        # Should not crash the event loop; exception is logged
+        assert recorder.is_recording is False
+
+    # ── on_room_changed mutants ───────────────────────────────────────
+
+    def test_on_room_changed_calls_update_info(self, recorder):
+        room = _make_room_info()
+        user = _make_user_info()
+        recorder._live.room_info = room
+        recorder._live.user_info = user
+        recorder.on_room_changed(recorder._live)
+        assert recorder._path_provider._room_info is room
+        assert recorder._metadata_provider._user_info is user
+
+    # ── _on_pipeline_failure mutants ──────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_on_pipeline_failure_stops_recording(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder.is_recording is True
+        recorder._on_pipeline_failure(RuntimeError("corrupt"))
+        await asyncio.sleep(0.1)
+        assert recorder.is_recording is False
+        assert recorder._statistics._start_time is None
+
+    def test_on_pipeline_failure_not_recording_is_noop(self, recorder):
+        recorder._on_pipeline_failure(RuntimeError("corrupt"))
+        assert recorder._stop_task is None
+
+    # ── stop_recording mutants ────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_stops_statistics(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        assert recorder._statistics._start_time is not None
+        await recorder.stop_recording()
+        assert recorder._statistics._start_time is None
+        assert recorder.is_recording is False
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_awaits_pending_stop_task(self, recorder):
+        """If a stop task is in flight, stop_recording awaits it."""
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        recorder.on_live_ended(recorder._live)
+        # Immediately call stop_recording while stop_task may be running
+        await recorder.stop_recording()
+        assert recorder.is_recording is False
+
+    # ── stop mutants ──────────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stop_removes_listener_from_monitor(self, recorder):
+        recorder.on_live_began(recorder._live)
+        await asyncio.sleep(0.05)
+        await recorder.stop()
+        recorder._monitor.remove_listener.assert_called_with(recorder)
