@@ -6,6 +6,8 @@ import asyncio
 import logging
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from ..bili.danmaku_client import DanmakuClientListener
 from ..bili.typing import Danmaku as RawDanmaku
@@ -17,6 +19,15 @@ __all__ = ("DanmakuReceiver", "DanmakuReceiverListener")
 logger = logging.getLogger(__name__)
 
 _MAX_QUEUE_SIZE = 2000
+
+# Room-state transitions the broadcast pushes (§3.3). Nothing records them to
+# disk, but the LiveMonitor needs them: they are the instant channel that
+# flips the state the moment a broadcast begins or ends, while the periodic
+# poll only catches up a whole check interval later (#27).
+_LIVE_STATUS_COMMANDS = frozenset({"LIVE", "PREPARING", "ROUND", "ROOM_CHANGE"})
+
+# ``LiveMonitor.handle_command`` is the intended target.
+LiveCommandHandler = Callable[[str, dict[str, Any] | None], Awaitable[None]]
 
 
 class DanmakuReceiverListener(EventListener):
@@ -31,14 +42,22 @@ class DanmakuReceiver(EventEmitter[DanmakuReceiverListener], DanmakuClientListen
     decouples the WebSocket callback from file I/O, and when it is full the
     oldest messages are dropped (FIFO eviction) so that a danmaku flood can
     never stall recording.
+
+    The room-state commands (LIVE/PREPARING/ROUND/ROOM_CHANGE) are not
+    recordable, so they never enter the queue; when a ``live_command_handler``
+    is installed they are forwarded to it instead — that is the wire that lets
+    the LiveMonitor flip the moment a broadcast begins or ends (#27).
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *, live_command_handler: LiveCommandHandler | None = None
+    ) -> None:
         super().__init__()
         self._queue: deque[DanmakuMessage] = deque(maxlen=_MAX_QUEUE_SIZE)
         self._event = asyncio.Event()
         self._dropped_count: int = 0
         self._stopped: bool = False
+        self._live_command_handler = live_command_handler
 
     @property
     def queue_size(self) -> int:
@@ -62,9 +81,37 @@ class DanmakuReceiver(EventEmitter[DanmakuReceiverListener], DanmakuClientListen
 
     def on_danmaku(self, danmaku: RawDanmaku) -> None:
         """Parse a raw broadcast command and queue it if it is recordable."""
+        cmd = str(danmaku.get("cmd", ""))
+        if cmd in _LIVE_STATUS_COMMANDS:
+            self._forward_live_command(cmd, danmaku)
+            return
         msg = self._parse(danmaku)
         if msg is not None:
             self.push(msg)
+
+    def _forward_live_command(self, cmd: str, danmaku: RawDanmaku) -> None:
+        """Hand a room-state command to the live monitor's handler.
+
+        ``on_danmaku`` runs inside the WebSocket receive loop and cannot await,
+        so the async handler is scheduled as a task. Scheduled tasks run FIFO,
+        so the state machine still sees the commands in arrival order.
+        """
+        handler = self._live_command_handler
+        if handler is None:
+            return
+        payload = danmaku.get("data")
+        data = payload if isinstance(payload, dict) else None
+        asyncio.ensure_future(self._run_live_command_handler(handler, cmd, data))
+
+    @staticmethod
+    async def _run_live_command_handler(
+        handler: LiveCommandHandler, cmd: str, data: dict[str, Any] | None
+    ) -> None:
+        """Run the handler so its failure cannot break the danmaku pipeline."""
+        try:
+            await handler(cmd, data)
+        except Exception:
+            logger.exception("Forwarding live command %s failed", cmd)
 
     def _parse(self, danmaku: RawDanmaku) -> DanmakuMessage | None:
         """Convert a raw command into a typed message, or None to ignore it.
