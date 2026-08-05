@@ -24,14 +24,22 @@ if TYPE_CHECKING:
 @pytest.fixture(autouse=True)
 def invariant_monitor(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[InvariantMonitor]:
+) -> Iterator[InvariantMonitor | None]:
     """The invariant witness from #19, applied to every system test.
 
     Every application started during the test is sampled in the background:
     while it claims to record, the disk must grow. A violation at any moment
     fails the test, with the observed sequence attached. New tests get this
     protection for free.
+
+    Tests marked ``no_invariant_monitor`` carry their own inline checks and
+    get no background sampler: the stateful exploration suppresses the two
+    growth invariants across a fault-finalized segment, which a sampler that
+    knows nothing about the rules could not do without crying wolf.
     """
+    if request.node.get_closest_marker("no_invariant_monitor") is not None:
+        yield None
+        return
     monitor = InvariantMonitor(request.node.nodeid)
     real_startup = Application.startup
     real_shutdown = Application.shutdown
