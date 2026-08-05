@@ -229,6 +229,14 @@ class TestRecorder:
         recorder.on_room_changed(recorder._live)
         assert recorder._path_provider.render().startswith(f"{tmp_path}/54321/rec")
 
+    def test_update_out_dir_moves_future_renders(self, recorder, tmp_path):
+        """update_out_dir must hot-swap the base dir used by later renders."""
+        recorder._path_provider._path_template = "rec"
+        new_dir = tmp_path / "elsewhere"
+        recorder.update_out_dir(str(new_dir))
+        assert recorder._path_provider.out_dir == str(new_dir)
+        assert recorder._path_provider.render() == f"{new_dir}/rec"
+
     @pytest.mark.asyncio
     async def test_on_live_started_idempotent(self, recorder):
         recorder.on_live_began(recorder._live)
