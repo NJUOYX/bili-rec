@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,6 +23,7 @@ from birec.core.raw_danmaku_receiver import RawDanmakuReceiver
 from birec.core.recorder import Recorder
 from birec.event import EventCenter
 from birec.exception import ExceptionCenter
+from birec.logging import configure_logger
 from birec.postprocess.danmaku_to_ass import DanmakuToAssConfig
 from birec.postprocess.postprocessor import Postprocessor
 from birec.setting.env import EnvSettings
@@ -118,6 +120,28 @@ class Application:
                 "Nothing was old enough to reclaim; the disk is still nearly full"
             )
 
+    def _apply_logging_config(self) -> None:
+        """Apply the logging settings from the settings manager.
+
+        Exception isolation: a failure here (permissions, bad path, etc.) must
+        not prevent the application from starting. The user still gets console
+        output at the default level; only the file sink is lost.
+        """
+        log_settings = self._settings_manager.settings.logging
+        log_dir = os.path.expanduser(log_settings.log_dir)
+        try:
+            configure_logger(
+                log_dir,
+                console_log_level=log_settings.console_log_level,
+                backup_count=log_settings.backup_count,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to configure file logging to %s; "
+                "continuing with console output only",
+                log_dir,
+            )
+
     @property
     def is_started(self) -> bool:
         return self._started
@@ -161,6 +185,7 @@ class Application:
         """Initialize application components."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self._apply_logging_config()
         self._session = aiohttp.ClientSession()
         self._bili_api = self._create_bili_api(self._session)
         await self._task_manager.start()
@@ -324,6 +349,14 @@ class Application:
                 danmaku_to_ass_enabled=choice.danmaku_to_ass_enabled,
                 danmaku_config=choice.danmaku_config,
             )
+
+    def refresh_logging(self) -> None:
+        """Re-apply logging settings after a configuration change.
+
+        ``configure_logger`` is idempotent: unchanged parameters are skipped,
+        so calling this on every settings PATCH is cheap.
+        """
+        self._apply_logging_config()
 
     @staticmethod
     def _postprocessing_for(
