@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .metadata import MediaMetadata
 
 __all__ = (
     "PostprocessingStatus",
@@ -43,6 +47,7 @@ class PostprocessingItem:
     progress: PostprocessingProgress = field(default_factory=PostprocessingProgress)
     related_files: list[Path] = field(default_factory=list)
     error: str = ""
+    metadata: MediaMetadata | None = None
 
     @property
     def is_done(self) -> bool:

@@ -1361,3 +1361,103 @@ class TestRecordTaskUpdateOutDir:
 
         assert recorder.is_recording is False
         await task.destroy()
+
+
+class TestBuildMediaMetadata:
+    """The task must build MediaMetadata from room info for inject_metadata (#30)."""
+
+    def test_full_room_info(self) -> None:
+        task, comps = _make_task()
+        comps["live"].room_info = RoomInfo(
+            uid=99,
+            room_id=12345,
+            short_room_id=0,
+            area_id=1,
+            area_name="Game",
+            parent_area_id=1,
+            parent_area_name="Entertainment",
+            live_status=LiveStatus.LIVE,
+            live_start_time=1735689600,  # 2025-01-01 00:00:00 UTC
+            online=100,
+            cover="https://example.com/cover.jpg",
+            tags="gaming",
+            description="A fun stream",
+            title="Live Stream Title",
+        )
+        comps["live"].user_info = UserInfo(
+            uid=99, name="Streamer", gender="male", face=""
+        )
+
+        meta = task._build_media_metadata()
+        assert meta.title == "Live Stream Title"
+        assert meta.artist == "Streamer"
+        assert meta.date == "2025-01-01"
+        assert meta.description == "A fun stream"
+        assert "12345" in meta.comment
+        assert "Game" in meta.comment
+
+    def test_missing_room_info(self) -> None:
+        task, comps = _make_task()
+        comps["live"].room_info = None
+        comps["live"].user_info = None
+
+        meta = task._build_media_metadata()
+        assert meta.title == ""
+        assert meta.artist == ""
+        assert meta.date == ""
+        assert meta.description == ""
+        assert "12345" in meta.comment
+
+    def test_zero_live_start_time(self) -> None:
+        task, comps = _make_task()
+        comps["live"].room_info = RoomInfo(
+            uid=99,
+            room_id=12345,
+            short_room_id=0,
+            area_id=0,
+            area_name="",
+            parent_area_id=0,
+            parent_area_name="",
+            live_status=LiveStatus.PREPARING,
+            live_start_time=0,
+            online=0,
+            cover="",
+            tags="",
+            description="",
+            title="",
+        )
+        comps["live"].user_info = None
+
+        meta = task._build_media_metadata()
+        assert meta.date == ""
+
+    def test_segment_completed_passes_metadata(self) -> None:
+        """Regression: _on_segment_completed must pass metadata to submit (#30)."""
+        task, comps = _make_task()
+        comps["live"].room_info = RoomInfo(
+            uid=99,
+            room_id=12345,
+            short_room_id=0,
+            area_id=1,
+            area_name="Game",
+            parent_area_id=1,
+            parent_area_name="Entertainment",
+            live_status=LiveStatus.LIVE,
+            live_start_time=1735689600,
+            online=100,
+            cover="",
+            tags="",
+            description="Desc",
+            title="My Stream",
+        )
+        comps["live"].user_info = UserInfo(
+            uid=99, name="Streamer", gender="male", face=""
+        )
+
+        listener = comps["recorder"].set_segment_listener.call_args[0][0]
+        listener(CompletedSegment(video_path="/rec/a.flv"))
+
+        kwargs = comps["postprocessor"].submit.call_args.kwargs
+        assert kwargs["metadata"] is not None
+        assert kwargs["metadata"].title == "My Stream"
+        assert kwargs["metadata"].artist == "Streamer"

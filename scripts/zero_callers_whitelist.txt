@@ -33,8 +33,6 @@ birec.hls.operators.segment_fetcher.SegmentFetcher.fetch_init  # HLS engine help
 # and should be wired (then delete the entry) or deliberately removed.
 birec.bili.live_monitor.LiveMonitor.repair_state_on_reconnect  # gap: meant to run when the danmaku client reconnects, but nothing calls it
 birec.logging.configure_logging.configure_logger  # gap: log-file configuration exists but no entrypoint applies it
-birec.postprocess.metadata.inject_metadata  # gap: postprocessor step 3 sets INJECTING status and then does nothing — the inject_metadata_enabled setting is accepted but never acts
-birec.postprocess.metadata.MediaMetadata  # belongs to the dead metadata-injection path; only ever referenced in annotations
 birec.postprocess.metadata.MediaMetadata.to_description_json  # belongs to the dead metadata-injection path
 
 # ── Framework surface: invoked by the framework, never by a name in src ──

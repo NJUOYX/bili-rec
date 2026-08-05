@@ -903,3 +903,139 @@ class TestPostprocessorDanmakuConversion:
         await self._run(pp, source, tmp_path / "rec.mp4")
 
         assert [item.status for item in completed] == [PostprocessingStatus.COMPLETED]
+
+
+class TestPostprocessorInjectMetadataWiring:
+    """Regression: the INJECTING step must actually call inject_metadata (#30).
+
+    Previously the postprocessor set the status to INJECTING and immediately
+    moved on without invoking inject_metadata, so enabling the feature had no
+    observable effect on the output file.
+    """
+
+    _INJECT = "birec.postprocess.postprocessor.inject_metadata"
+
+    async def _run(
+        self,
+        pp: Postprocessor,
+        source: Path,
+        output: Path,
+        metadata: MediaMetadata | None = None,
+    ) -> list[PostprocessingItem]:
+        completed: list[PostprocessingItem] = []
+        pp.set_completion_listener(completed.append)
+        await pp.start()
+        pp.submit(source, output, metadata=metadata)
+        await asyncio.sleep(0.2)
+        await pp.stop()
+        return completed
+
+    @pytest.mark.asyncio
+    async def test_enabled_with_metadata_calls_inject(self, tmp_path: Path) -> None:
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        output = tmp_path / "rec.mp4"
+        meta = MediaMetadata(title="Test Stream", artist="Streamer")
+
+        pp = Postprocessor(remux_enabled=False, inject_metadata_enabled=True)
+
+        with patch(self._INJECT, new_callable=AsyncMock, return_value=True) as m:
+            completed = await self._run(pp, source, output, metadata=meta)
+
+        assert completed[0].status == PostprocessingStatus.COMPLETED
+        m.assert_awaited_once()
+        args = m.call_args[0]
+        assert args[0] == source  # output doesn't exist → falls back to source
+        assert args[1] is meta
+
+    @pytest.mark.asyncio
+    async def test_disabled_with_metadata_skips_inject(self, tmp_path: Path) -> None:
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        output = tmp_path / "rec.mp4"
+        meta = MediaMetadata(title="Test")
+
+        pp = Postprocessor(remux_enabled=False, inject_metadata_enabled=False)
+
+        with patch(self._INJECT, new_callable=AsyncMock) as m:
+            completed = await self._run(pp, source, output, metadata=meta)
+
+        assert completed[0].status == PostprocessingStatus.COMPLETED
+        m.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enabled_without_metadata_skips_inject(self, tmp_path: Path) -> None:
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        output = tmp_path / "rec.mp4"
+
+        pp = Postprocessor(remux_enabled=False, inject_metadata_enabled=True)
+
+        with patch(self._INJECT, new_callable=AsyncMock) as m:
+            completed = await self._run(pp, source, output, metadata=None)
+
+        assert completed[0].status == PostprocessingStatus.COMPLETED
+        m.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_inject_failure_does_not_fail_item(self, tmp_path: Path) -> None:
+        """Metadata injection failure must be non-fatal (item still completes)."""
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        output = tmp_path / "rec.mp4"
+        meta = MediaMetadata(title="Test")
+
+        pp = Postprocessor(remux_enabled=False, inject_metadata_enabled=True)
+
+        with patch(self._INJECT, new_callable=AsyncMock, return_value=False):
+            completed = await self._run(pp, source, output, metadata=meta)
+
+        assert completed[0].status == PostprocessingStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_inject_targets_remuxed_output(self, tmp_path: Path) -> None:
+        """When the remux produced an output file, inject into that, not the source."""
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        output = tmp_path / "rec.mp4"
+        meta = MediaMetadata(title="Test")
+
+        pp = Postprocessor(remux_enabled=True, inject_metadata_enabled=True)
+
+        async def _fake_remux(src: Path, dst: Path) -> bool:
+            dst.write_bytes(b"fake mp4")
+            return True
+
+        with (
+            patch(
+                "birec.postprocess.postprocessor.remux_flv_to_mp4",
+                new=_fake_remux,
+            ),
+            patch(self._INJECT, new_callable=AsyncMock, return_value=True) as m,
+        ):
+            completed = await self._run(pp, source, output, metadata=meta)
+
+        assert completed[0].status == PostprocessingStatus.COMPLETED
+        m.assert_awaited_once()
+        assert m.call_args[0][0] == output  # inject targets the remuxed file
+
+    @pytest.mark.asyncio
+    async def test_inject_exception_isolated(self, tmp_path: Path) -> None:
+        """An exception from inject_metadata must not crash the pipeline."""
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        output = tmp_path / "rec.mp4"
+        meta = MediaMetadata(title="Test")
+
+        pp = Postprocessor(remux_enabled=False, inject_metadata_enabled=True)
+
+        with patch(
+            self._INJECT,
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("ffmpeg exploded"),
+        ):
+            completed = await self._run(pp, source, output, metadata=meta)
+
+        # The worker catches the exception and marks the item FAILED
+        assert len(completed) == 1
+        assert completed[0].status == PostprocessingStatus.FAILED

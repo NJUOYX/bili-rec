@@ -6,6 +6,7 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,6 +33,7 @@ from ..event import (
     VideoPostprocessingCompletedEvent,
     VideoPostprocessingCompletedEventData,
 )
+from ..postprocess.metadata import MediaMetadata
 from ..postprocess.models import PostprocessingItem, PostprocessingStatus
 
 if TYPE_CHECKING:
@@ -301,7 +303,34 @@ class RecordTask:
             if path
         ]
         self._postprocessor.submit(
-            video, video.with_suffix(".mp4"), related_files=related
+            video,
+            video.with_suffix(".mp4"),
+            related_files=related,
+            metadata=self._build_media_metadata(),
+        )
+
+    def _build_media_metadata(self) -> MediaMetadata:
+        """Build ffmpeg-injectable metadata from the current live room state."""
+        room_info = self._live.room_info
+        user_info = self._live.user_info
+        title = room_info.title if room_info else ""
+        artist = user_info.name if user_info else ""
+        date = ""
+        if room_info and room_info.live_start_time:
+            date = datetime.fromtimestamp(room_info.live_start_time, tz=UTC).strftime(
+                "%Y-%m-%d"
+            )
+        description = room_info.description if room_info else ""
+        area = room_info.area_name if room_info else ""
+        comment = f"Bilibili Live Room {self._room_id}"
+        if area:
+            comment += f" - {area}"
+        return MediaMetadata(
+            title=title,
+            artist=artist,
+            date=date,
+            description=description,
+            comment=comment,
         )
 
     def _emit_file_completed_events(self, segment: CompletedSegment) -> None:

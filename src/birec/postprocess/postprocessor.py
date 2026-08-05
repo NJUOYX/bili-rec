@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .danmaku_to_ass import DanmakuToAssConfig, convert_danmaku_to_ass
-from .metadata import MediaMetadata
+from .metadata import MediaMetadata, inject_metadata
 from .models import PostprocessingItem, PostprocessingProgress, PostprocessingStatus
 from .remux import remux_flv_to_mp4, remux_fmp4_to_mp4
 
@@ -151,6 +151,7 @@ class Postprocessor:
             source_path=source_path,
             output_path=output_path,
             related_files=related_files or [],
+            metadata=metadata,
         )
         self._queue.put_nowait(item)
         logger.debug("Submitted %s for postprocessing", source_path)
@@ -208,13 +209,17 @@ class Postprocessor:
                 return
 
         # Step 3: Metadata injection
-        if self._inject_metadata_enabled:
+        if self._inject_metadata_enabled and item.metadata is not None:
             item.status = PostprocessingStatus.INJECTING
             item.progress = PostprocessingProgress(
                 status=PostprocessingStatus.INJECTING
             )
+            # Inject into the remuxed output if it exists, else into the source.
+            target = item.output_path if item.output_path.exists() else source
             # Metadata injection is optional - don't fail the whole task
             # if it fails
+            if not await inject_metadata(target, item.metadata):
+                logger.warning("Metadata injection failed for %s, continuing", target)
 
         # Step 4: AUTO delete source, but only once something has taken its
         # place. Skipping the remux skips the only step that produces a
