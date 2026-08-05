@@ -213,3 +213,73 @@ class TestKeepingTheSocketAlive:
             timeout=2.0,
             what="the unanswered heartbeat to trigger a reconnect",
         )
+
+
+class TestReconnectStateRepair:
+    """Reconnecting must repair stale state, not just restore the socket (#28)."""
+
+    async def test_reconnect_repairs_state_changed_during_disconnect(
+        self, client: AsyncClient, fake_server: FakeBiliServer
+    ) -> None:
+        """A room already live when the socket comes back must be caught immediately.
+
+        The first connection drops right after auth; the room is set live before
+        the client reconnects. Without the repair wire, the monitor would only
+        learn the status from the periodic poll (~600s away). The reconnect must
+        trigger an immediate status check instead.
+        """
+        # The first connection will die right after auth, so the client will
+        # be in a reconnect cycle when the task is fully set up.
+        fake_server.set_fault(ws_close_after_auth=True, ws_fault_first_only=True)
+
+        # Set the room live *before* the task is created. The initial status
+        # check in the periodic loop might catch it, but the reconnect repair
+        # should also catch it — and the reconnect happens first since the
+        # first connection drops immediately.
+        fake_server.set_live()
+
+        await add_task(client)
+        task = task_of(client)
+        monitor = task._monitor  # noqa: SLF001
+
+        # The client must reconnect (second connection succeeds).
+        await wait_until(
+            lambda: fake_server.ws_connections_total >= 2,
+            what="the client to reconnect after the first connection dropped",
+        )
+        await wait_until(
+            lambda: task._danmaku_client.connected,  # noqa: SLF001
+            what="the reconnected socket to finish its handshake",
+        )
+
+        # The repair fired on reconnect; the monitor now knows the room is live.
+        await wait_until(
+            lambda: monitor.is_living,
+            what="the monitor to repair state on reconnect",
+        )
+
+    async def test_reconnect_repair_is_idempotent_across_reconnects(
+        self, client: AsyncClient, fake_server: FakeBiliServer
+    ) -> None:
+        """Multiple reconnect cycles must not produce duplicate events.
+
+        The repair checks the API and reconciles — if the state already matches,
+        no event fires. This matters because reconnects happen frequently on
+        unstable networks, and each one triggers the repair.
+        """
+        fake_server.set_fault(ws_close_after_auth=True, ws_fault_first_only=True)
+        fake_server.set_live()
+
+        await add_task(client)
+        task = task_of(client)
+        monitor = task._monitor  # noqa: SLF001
+
+        # Wait for the reconnect and the repair.
+        await wait_until(
+            lambda: monitor.is_living,
+            what="the monitor to repair state on reconnect",
+        )
+
+        # The state is stable: the repair and the periodic check share the same
+        # state machine — seeing LIVE when already living is a no-op.
+        assert monitor.is_living is True

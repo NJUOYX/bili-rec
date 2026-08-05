@@ -67,6 +67,49 @@ class TestDanmakuReceiver:
         r.clear()
         assert r.queue_size == 0
 
+    @pytest.mark.asyncio
+    async def test_on_danmaku_connected_schedules_reconnect(self):
+        """Connected event must schedule the reconnect handler as a task (#28)."""
+        called = False
+
+        async def handler() -> None:
+            nonlocal called
+            called = True
+
+        r = DanmakuReceiver(on_reconnect=handler)
+        r.on_danmaku_connected()
+
+        # Let the scheduled task run.
+        import asyncio
+
+        await asyncio.sleep(0)
+        assert called is True
+
+    def test_on_danmaku_connected_without_handler(self):
+        """No handler installed → no-op, no error."""
+        r = DanmakuReceiver()
+        r.on_danmaku_connected()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_on_danmaku_connected_isolates_handler_failure(self):
+        """A failing handler must not crash the danmaku pipeline (#28)."""
+
+        async def handler() -> None:
+            raise RuntimeError("API down")
+
+        r = DanmakuReceiver(on_reconnect=handler)
+        r.on_danmaku_connected()  # must not raise
+
+        import asyncio
+
+        # Let the scheduled task run; it should log but not propagate.
+        await asyncio.sleep(0)
+
+    def test_on_danmaku_disconnected_is_noop(self):
+        """Disconnection is handled by the reconnect path, not here."""
+        r = DanmakuReceiver()
+        r.on_danmaku_disconnected()  # must not raise
+
 
 # ── DanmakuDumper ─────────────────────────────────────────────────────────────
 
