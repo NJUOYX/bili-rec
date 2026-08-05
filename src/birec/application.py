@@ -292,7 +292,14 @@ class Application:
         # ROOM_CHANGE) to the monitor — the instant begin/end channel. The
         # periodic check only backs it up; on its own it would learn about a
         # transition a whole check interval late (#27).
-        danmaku_receiver = DanmakuReceiver(live_command_handler=monitor.handle_command)
+        # The receiver additionally schedules a state repair whenever the
+        # danmaku client (re)connects, so a status change missed during the
+        # disconnect window is caught the moment the WebSocket comes back
+        # rather than waiting for the next periodic poll (#28).
+        danmaku_receiver = DanmakuReceiver(
+            live_command_handler=monitor.handle_command,
+            on_reconnect=monitor.repair_state_on_reconnect,
+        )
         danmaku_client.add_listener(danmaku_receiver)
         save_raw = _pick(
             task.danmaku.save_raw_danmaku if task else None,

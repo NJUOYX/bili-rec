@@ -539,6 +539,7 @@ class TestReconnectRepair:
         monitor, live = _make_monitor()
         listener = _RecordingListener()
         monitor.add_listener(listener)
+        monitor.enable()
 
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
@@ -551,6 +552,7 @@ class TestReconnectRepair:
         assert monitor.stream_available is False
         assert listener.events == ["live_began"]
         assert listener.lives == [live]
+        monitor.disable()
 
     async def test_repair_detects_ended(self) -> None:
         monitor, live = _make_monitor()
@@ -558,6 +560,7 @@ class TestReconnectRepair:
         monitor.add_listener(listener)
         monitor._is_living = True
         monitor._stream_available = True
+        monitor.enable()
 
         with patch.object(live, "get_live_status", new_callable=AsyncMock) as m:
             m.return_value = LiveStatus.PREPARING
@@ -567,6 +570,7 @@ class TestReconnectRepair:
         assert monitor.stream_available is False
         assert listener.events == ["live_ended"]
         assert listener.lives == [live]
+        monitor.disable()
 
     async def test_repair_already_living_starts_poll(self) -> None:
         monitor, live = _make_monitor()
@@ -574,6 +578,7 @@ class TestReconnectRepair:
         monitor.add_listener(listener)
         monitor._is_living = True
         monitor._stream_available = False
+        monitor.enable()
 
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
@@ -585,6 +590,52 @@ class TestReconnectRepair:
         # Should not re-emit live_began, but should start poll
         assert "live_began" not in listener.events
         m_poll.assert_called_once()
+        monitor.disable()
+
+    async def test_repair_skipped_when_disabled(self) -> None:
+        """A disabled monitor has no knowledge — repair must be a no-op."""
+        monitor, live = _make_monitor()
+        listener = _RecordingListener()
+        monitor.add_listener(listener)
+        # Not enabled
+
+        with patch.object(live, "get_live_status", new_callable=AsyncMock) as m:
+            m.return_value = LiveStatus.LIVE
+            await monitor.repair_state_on_reconnect()
+
+        assert monitor.is_living is False
+        assert listener.events == []
+        m.assert_not_called()
+
+    async def test_repair_swallows_api_failure(self) -> None:
+        """A failed status check must not crash the reconnect path."""
+        monitor, live = _make_monitor()
+        monitor.enable()
+
+        with patch.object(live, "get_live_status", new_callable=AsyncMock) as m:
+            m.side_effect = Exception("network down")
+            await monitor.repair_state_on_reconnect()  # must not raise
+
+        assert monitor.is_living is False
+        monitor.disable()
+
+    async def test_repair_is_idempotent(self) -> None:
+        """Calling repair twice with the same status must emit events only once."""
+        monitor, live = _make_monitor()
+        listener = _RecordingListener()
+        monitor.add_listener(listener)
+        monitor.enable()
+
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(monitor, "_start_stream_poll"),
+        ):
+            m.return_value = LiveStatus.LIVE
+            await monitor.repair_state_on_reconnect()
+            await monitor.repair_state_on_reconnect()
+
+        assert listener.events == ["live_began"]
+        monitor.disable()
 
 
 class TestLifecycle:

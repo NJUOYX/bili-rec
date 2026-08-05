@@ -34,6 +34,10 @@ class DanmakuReceiverListener(EventListener):
     """Listener interface for DanmakuReceiver events."""
 
 
+# ``LiveMonitor.repair_state_on_reconnect`` is the intended target.
+ReconnectHandler = Callable[[], Awaitable[None]]
+
+
 class DanmakuReceiver(EventEmitter[DanmakuReceiverListener], DanmakuClientListener):
     """Bounded async queue for processed danmaku messages.
 
@@ -47,10 +51,18 @@ class DanmakuReceiver(EventEmitter[DanmakuReceiverListener], DanmakuClientListen
     recordable, so they never enter the queue; when a ``live_command_handler``
     is installed they are forwarded to it instead — that is the wire that lets
     the LiveMonitor flip the moment a broadcast begins or ends (#27).
+
+    When the danmaku client (re)connects successfully, ``on_danmaku_connected``
+    schedules the ``on_reconnect`` handler as a task. This is the wire that
+    lets the LiveMonitor repair stale state the moment the WebSocket comes
+    back, rather than waiting for the next periodic poll (#28).
     """
 
     def __init__(
-        self, *, live_command_handler: LiveCommandHandler | None = None
+        self,
+        *,
+        live_command_handler: LiveCommandHandler | None = None,
+        on_reconnect: ReconnectHandler | None = None,
     ) -> None:
         super().__init__()
         self._queue: deque[DanmakuMessage] = deque(maxlen=_MAX_QUEUE_SIZE)
@@ -58,6 +70,7 @@ class DanmakuReceiver(EventEmitter[DanmakuReceiverListener], DanmakuClientListen
         self._dropped_count: int = 0
         self._stopped: bool = False
         self._live_command_handler = live_command_handler
+        self._on_reconnect = on_reconnect
 
     @property
     def queue_size(self) -> int:
@@ -88,6 +101,30 @@ class DanmakuReceiver(EventEmitter[DanmakuReceiverListener], DanmakuClientListen
         msg = self._parse(danmaku)
         if msg is not None:
             self.push(msg)
+
+    def on_danmaku_connected(self) -> None:
+        """Schedule the reconnect handler after a successful (re)connection.
+
+        ``on_danmaku_connected`` runs inside the WebSocket handshake and cannot
+        await, so the async handler is scheduled as a task. The handler itself
+        is best-effort: any exception it raises is logged and swallowed, so a
+        failed status check cannot break the danmaku pipeline (#28).
+        """
+        handler = self._on_reconnect
+        if handler is None:
+            return
+        asyncio.ensure_future(self._run_reconnect_handler(handler))
+
+    @staticmethod
+    async def _run_reconnect_handler(handler: ReconnectHandler) -> None:
+        """Run the reconnect handler so its failure cannot break the pipeline."""
+        try:
+            await handler()
+        except Exception:
+            logger.exception("Reconnect state repair failed")
+
+    def on_danmaku_disconnected(self) -> None:
+        """No-op: disconnection is handled by the reconnect path on recovery."""
 
     def _forward_live_command(self, cmd: str, danmaku: RawDanmaku) -> None:
         """Hand a room-state command to the live monitor's handler.

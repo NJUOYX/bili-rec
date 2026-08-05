@@ -216,7 +216,14 @@ class LiveMonitor(SwitchableMixin, EventEmitter[LiveMonitorListener]):
     # --- Reconnection State Repair ---
 
     async def repair_state_on_reconnect(self) -> None:
-        """Re-check status after danmaku client reconnects and re-emit events."""
+        """Re-check status after danmaku client reconnects and re-emit events.
+
+        A disabled monitor is not watching, so it has nothing to repair: the
+        guard matches ``handle_command`` and prevents stale events from leaking
+        out of a monitor the user explicitly turned off.
+        """
+        if not self.enabled:
+            return
         self._logger.debug("Repairing state on reconnect")
         try:
             status = await self._live.get_live_status()
