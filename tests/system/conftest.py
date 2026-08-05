@@ -7,17 +7,50 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from birec.application import create_application
+from birec.application import Application, create_application
 from birec.event import EventCenter
 
 from .fake_bili_server import FakeBiliServer
 from .harness import ROOM_ID
+from .invariant_monitor import InvariantMonitor
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
     from pathlib import Path
 
     from fastapi import FastAPI
+
+
+@pytest.fixture(autouse=True)
+def invariant_monitor(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[InvariantMonitor]:
+    """The invariant witness from #19, applied to every system test.
+
+    Every application started during the test is sampled in the background:
+    while it claims to record, the disk must grow. A violation at any moment
+    fails the test, with the observed sequence attached. New tests get this
+    protection for free.
+    """
+    monitor = InvariantMonitor(request.node.nodeid)
+    real_startup = Application.startup
+    real_shutdown = Application.shutdown
+
+    async def startup_with_monitor(self: Application) -> None:
+        await real_startup(self)
+        monitor.register(self)
+
+    async def shutdown_with_monitor(self: Application) -> None:
+        monitor.unregister(self)
+        await real_shutdown(self)
+
+    monkeypatch.setattr(Application, "startup", startup_with_monitor)
+    monkeypatch.setattr(Application, "shutdown", shutdown_with_monitor)
+    try:
+        yield monitor
+    finally:
+        if monitor.violations:
+            pytest.fail(monitor.report(), pytrace=False)
 
 
 @pytest.fixture
