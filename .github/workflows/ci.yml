@@ -26,4 +26,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src
+      # B-class detector (#19 方案 5): public classes/methods in src must have
+      # a runtime caller in src. Whitelist: scripts/zero_callers_whitelist.txt
+      - run: uv run python scripts/zero_callers.py
       - run: uv run pytest -m "unit or component" --cov=birec --cov-report=xml --cov-fail-under=80

@@ -1,0 +1,153 @@
+# Whitelist for scripts/zero_callers.py (方案 5 of #19).
+#
+# Every line: fully qualified name, then "#", then the reason the orphan is
+# kept. Entries that no longer match an orphan fail the check, so prune this
+# file the day an orphan gets wired. Do NOT add entries just to quiet a new
+# orphan: wire it, or justify it here in front of reviewers.
+
+# ── HLS/fMP4 pipeline: built, deliberately not wired yet ─────────────
+# The only download loop in production speaks FLV; choosing stream_format
+# "fmp4" is accepted and silently ignored. Pinned by the strict xfail
+# TestHlsRecording in tests/system/test_recording_pipeline.py, which turns
+# green the day the HLS loop lands — delete these entries the same day.
+birec.core.stream_recorder.StreamRecorder.create_hls_pipeline  # entry point of the unwired HLS pipeline
+birec.core.stream_recorder.StreamRecorder.feed_hls_playlist  # HLS feeding path, reachable only through create_hls_pipeline
+birec.core.stream_recorder.StreamRecorder.feed_hls_segment  # HLS feeding path, reachable only through create_hls_pipeline
+birec.core.stream_recorder.StreamRecorder.write_hls_init  # HLS feeding path, reachable only through create_hls_pipeline
+birec.core.stream_recorder.StreamRecorder.resolve_stream_format  # fmp4 selection path that the missing HLS loop would use
+birec.core.stream_recorder.StreamRecorder.wait_for_fmp4_stream  # fmp4 handshake the missing HLS loop would perform
+birec.hls.operators.analyse.analyse  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.analyse.HlsAnalyser.dump_metadata  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.playlist_dumper.dump_playlist  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.playlist_fetcher.fetch_playlist  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.playlist_resolver.resolve_playlist  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.probe.HlsProber  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.probe.HlsProber.probe_file  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.probe.probe  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.segment_dumper.dump_segments  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.segment_fetcher.fetch_segments  # HLS engine helper, only reachable through the unwired pipeline
+birec.hls.operators.segment_fetcher.SegmentFetcher.fetch_init  # HLS engine helper, only reachable through the unwired pipeline
+
+# ── Known gaps: wired-looking code that production never reaches ─────
+# Surfaced by the first run of this check. Each one is a B-class candidate
+# and should be wired (then delete the entry) or deliberately removed.
+birec.bili.live_monitor.LiveMonitor.handle_command  # gap: DanmakuReceiver drops LIVE/PREPARING/ROOM_CHANGE commands, so nothing forwards them here; live detection in production relies on periodic polling alone, and only tests call this directly
+birec.bili.live_monitor.LiveMonitor.repair_state_on_reconnect  # gap: meant to run when the danmaku client reconnects, but nothing calls it
+birec.logging.configure_logging.configure_logger  # gap: log-file configuration exists but no entrypoint applies it
+birec.postprocess.metadata.inject_metadata  # gap: postprocessor step 3 sets INJECTING status and then does nothing — the inject_metadata_enabled setting is accepted but never acts
+birec.postprocess.metadata.MediaMetadata  # belongs to the dead metadata-injection path; only ever referenced in annotations
+birec.postprocess.metadata.MediaMetadata.to_description_json  # belongs to the dead metadata-injection path
+
+# ── Framework surface: invoked by the framework, never by a name in src ──
+birec.cli.main  # console-script parity entrypoint; pyproject binds the typer app object (birec.cli:app) instead
+birec.web.middleware.BaseHrefMiddleware.dispatch  # Starlette's BaseHTTPMiddleware calls dispatch() on every request
+birec.web.middleware.RouteRedirectMiddleware.dispatch  # Starlette's BaseHTTPMiddleware calls dispatch() on every request
+birec.web.routers.tasks.AddTaskRequest  # FastAPI constructs the request body from the handler annotation
+birec.web.routers.tasks.BatchRoomIds  # FastAPI constructs the request body from the handler annotation
+birec.web.routers.tasks.BatchStopRequest  # FastAPI constructs the request body from the handler annotation
+birec.web.routers.tasks.DeleteTasksRequest  # FastAPI constructs the request body from the handler annotation
+
+# ── Grandfathered toolkit: pinned by tests, no production caller ─────
+# Kept as library surface ported from the blrec design; tests exercise it
+# directly. A new component must NOT be whitelisted into this section —
+# wire it into application assembly instead.
+birec.bili.api.AppApi.get_user_info  # app-API extra with no production flow; login uses request_tv_qrcode/poll_tv_qrcode
+birec.bili.api.WebApi.get_info  # web-API variant superseded by the app-API flows
+birec.bili.api.WebApi.get_timestamp  # web-API variant superseded by the app-API flows
+birec.bili.api.WebApi.get_user_info  # web-API variant superseded by the app-API flows
+birec.bili.helpers.build_cookie_str  # cookie helper kept for parity; pinned by tests
+birec.bili.helpers.ensure_room_id  # room-id normalisation helper; pinned by tests
+birec.bili.helpers.get_quality_name  # quality-name lookup; pinned by tests
+birec.bili.helpers.poll_qrcode  # web-API QR login variant; production login uses AppApi.poll_tv_qrcode
+birec.bili.helpers.request_qrcode  # web-API QR login variant; production login uses AppApi.request_tv_qrcode
+birec.bili.live.Live.check_room_state  # hidden/locked/encrypted room guard never invoked by the production flow; pinned by tests
+birec.core.danmaku_receiver.DanmakuReceiver.get_nowait  # non-blocking queue read used only by tests
+birec.core.metadata_provider.MetadataProvider.set_stream_info  # stream-info hook never invoked by the production flow; pinned by tests
+birec.core.models.StreamEvent  # stream-event model with no runtime producer in src
+birec.core.operators.connection_error_handler.ConnectionErrorHandler.record_success  # success bookkeeping the production retry loop does not report
+birec.core.operators.connection_error_handler.ConnectionErrorHandler.set_callbacks  # retry callbacks the production wiring never installs
+birec.core.operators.exception_handler.ExceptionHandler  # first-generation operator; the production pipeline reports via ExceptionCenter
+birec.core.operators.exception_handler.ExceptionHandler.handle  # first-generation operator; the production pipeline reports via ExceptionCenter
+birec.core.operators.recording_monitor.RecordingMonitor  # first-generation class operator; production recording monitors file size in Recorder itself
+birec.core.operators.recording_monitor.RecordingMonitor.on_data  # first-generation class operator; superseded
+birec.core.operators.recording_monitor.RecordingMonitor.set_callbacks  # first-generation class operator; superseded
+birec.core.operators.request_exception_handler.RequestExceptionHandler  # first-generation class operator; superseded by tenacity retries in the fetch path
+birec.core.operators.request_exception_handler.RequestExceptionHandler.handle  # first-generation class operator; superseded
+birec.core.operators.stream_fetcher.StreamFetcher.fetch_flv  # legacy fetch loop; production downloads via FLVStreamRecorderImpl
+birec.core.operators.stream_fetcher.StreamFetcher.fetch_ts  # HLS variant of the legacy fetch loop; the HLS path is unwired
+birec.core.operators.stream_fetcher.StreamFetcher.reset_bytes  # legacy counter reset never invoked in src
+birec.core.operators.stream_parser.StreamParser  # first-generation class parser; production uses the function operators (birec.flv.operators parse/process)
+birec.core.operators.stream_parser.StreamParser.detect_flv_header  # first-generation class parser; superseded
+birec.core.operators.stream_parser.StreamParser.detect_ts_sync  # first-generation class parser; superseded
+birec.core.operators.stream_statistics.StreamStatistics.increment_segment  # multi-segment counter never incremented in src
+birec.core.path_provider.PathProvider.meta_json_path  # sidecar-metadata path never written in src
+birec.core.raw_danmaku_receiver.RawDanmakuReceiver.get_nowait  # non-blocking queue read used only by tests
+birec.core.stream_param_holder.StreamParamHolder.fallback_quality  # failover-state accessor never read by the production fetch path; pinned by tests
+birec.core.stream_param_holder.StreamParamHolder.next_platform  # failover-state accessor never read by the production fetch path; pinned by tests
+birec.danmaku.combinator.DanmakuCombinator  # danmaku-file merging toolkit for joined recordings; not part of current postprocessing
+birec.danmaku.combinator.DanmakuCombinator.combine  # danmaku-file merging toolkit; pinned by tests
+birec.danmaku.combinator.DanmakuConcatenator  # danmaku-file merging toolkit; pinned by tests
+birec.danmaku.combinator.DanmakuConcatenator.concatenate  # danmaku-file merging toolkit; pinned by tests
+birec.danmaku.utils.clear_danmu  # danmaku XML editing toolkit; pinned by tests
+birec.danmaku.utils.copy_danmus  # danmaku XML editing toolkit; pinned by tests
+birec.danmaku.utils.has_danmu  # danmaku XML editing toolkit; pinned by tests
+birec.danmaku.utils.merge_danmaku  # danmaku XML editing toolkit; pinned by tests
+birec.exception.exception_handler.ExceptionHandler  # reporting handler superseded by ExceptionCenter/ExceptionSubmitter
+birec.exception.exception_submitter.exception_callback  # module-level hook superseded by ExceptionCenter
+birec.exception.exceptions.ExistsError  # reserved exception type never raised in src
+birec.exception.exceptions.ForbiddenError  # reserved exception type never raised in src
+birec.flv.common.is_avc_end_sequence_tag  # flv toolkit surface; pinned by tests
+birec.flv.common.is_sequence_header  # flv toolkit surface; pinned by tests
+birec.flv.exceptions.FlvFileCorruptedError  # flv toolkit surface; reserved error type
+birec.flv.io.FlvReader  # flv toolkit surface; tests build/parse FLV bytes with it
+birec.flv.io.FlvReader.read_body  # flv toolkit surface; pinned by tests
+birec.flv.io.FlvReader.read_header  # flv toolkit surface; pinned by tests
+birec.flv.io.FlvReader.read_tags  # flv toolkit surface; pinned by tests
+birec.flv.io.FlvReader.rread_tags  # flv toolkit surface; pinned by tests
+birec.flv.io.FlvWriter  # flv toolkit surface; system tests build FLV fixtures with it
+birec.flv.io.FlvWriter.write_header  # flv toolkit surface; pinned by tests
+birec.flv.io.FlvWriter.write_tags  # flv toolkit surface; pinned by tests
+birec.flv.metadata_analysis.analyse_metadata  # flv metadata toolkit; pinned by tests
+birec.flv.metadata_analysis.get_duration  # flv metadata toolkit; pinned by tests
+birec.flv.metadata_analysis.get_resolution  # flv metadata toolkit; pinned by tests
+birec.flv.metadata_dumper.dump_metadata  # flv metadata toolkit; pinned by tests
+birec.flv.metadata_dumper.load_metadata  # flv metadata toolkit; pinned by tests
+birec.flv.models.AudioTag.is_aac_format  # flv model helper; pinned by tests
+birec.flv.models.FlvHeader.has_audio  # flv model helper; pinned by tests
+birec.flv.models.FlvHeader.has_video  # flv model helper; pinned by tests
+birec.flv.models.FlvHeader.set_audio_flag  # flv model helper; pinned by tests
+birec.flv.models.FlvHeader.set_video_flag  # flv model helper; pinned by tests
+birec.flv.models.FlvTag.is_the_same_as  # flv model helper; pinned by tests
+birec.flv.operators.analyse.analyse  # flv operator kept for parity; production pipeline uses parse/process/progress/dump
+birec.flv.operators.concat.JoinPointExtractor  # flv concat toolkit for joined recordings; pinned by tests
+birec.flv.operators.inject.inject  # flv metadata injection operator; pinned by tests
+birec.flv.operators.probe.Prober  # flv probing toolkit; pinned by tests
+birec.flv.operators.probe.Prober.probe_file  # flv probing toolkit; pinned by tests
+birec.flv.operators.probe.probe  # flv probing toolkit; pinned by tests
+birec.flv.operators.progress.ProgressBar.get_status  # progress snapshot helper; pinned by tests
+birec.flv.struct_io.RandomIO  # binary struct IO toolkit; pinned by tests
+birec.flv.struct_io.StructReader.read_f64  # binary struct IO toolkit; pinned by tests
+birec.flv.struct_io.StructReader.read_si16  # binary struct IO toolkit; pinned by tests
+birec.flv.struct_io.StructReader.read_ui16  # binary struct IO toolkit; pinned by tests
+birec.flv.struct_io.StructWriter.write_f64  # binary struct IO toolkit; pinned by tests
+birec.flv.struct_io.StructWriter.write_si16  # binary struct IO toolkit; pinned by tests
+birec.flv.struct_io.StructWriter.write_ui16  # binary struct IO toolkit; pinned by tests
+birec.flv.utils.format_timestamp  # flv toolkit surface; pinned by tests
+birec.logging.context.async_task_with_logger_context  # log-context task helper never used in src; pinned by tests
+birec.path.deduplicate_path  # path template toolkit; production PathProvider renders without these helpers
+birec.path.derive_path  # path template toolkit; pinned by tests
+birec.path.render_template  # path template toolkit; pinned by tests
+birec.path.validate_template  # path template toolkit; pinned by tests
+birec.postprocess.remux.parse_ffmpeg_size  # remux helper for reading ffmpeg progress; pinned by tests
+birec.setting.helpers.update_settings  # settings writer superseded by the SettingsManager methods the web router calls
+birec.setting.setting_manager.SettingsManager.resolve_task_settings  # resolution helper superseded by application._pick fallbacks
+birec.update.PypiApi.get_project_info  # full project-info fetch; the update check only uses get_latest_version_string
+birec.utils.hash.md5sum  # hash helper kept for parity; pinned by tests
+birec.utils.hash.sha1sum  # hash helper kept for parity; pinned by tests
+birec.utils.mixins.AsyncCooperationMixin  # legacy mixin base; current components use AsyncStoppableMixin/SwitchableMixin
+birec.utils.mixins.StoppableMixin  # legacy sync mixin base; current components use AsyncStoppableMixin/SwitchableMixin
+birec.utils.mixins.SupportDebugMixin  # legacy debug mixin base never mixed into a production class
+birec.utils.operators.observe_on.observe_on_new_thread  # reactivex scheduler helper no pipeline uses
+birec.utils.string.extract_buvid_from_cookie  # cookie-parsing helper; pinned by tests
+birec.utils.string.extract_uid_from_cookie  # cookie-parsing helper; pinned by tests
+birec.utils.string.snake_case  # string helper; pinned by tests

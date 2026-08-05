@@ -114,8 +114,10 @@ show_missing = true
 # than at the whole tree.
 [tool.mutmut]
 # The whole package is copied so imports resolve inside mutants/, while
-# only_mutate keeps the actual mutation surface small.
-source_paths = ["src/birec"]
+# only_mutate keeps the actual mutation surface small. ``scripts`` rides
+# along because tests/unit/scripts loads scripts/zero_callers.py by path,
+# and the copy is what those tests see.
+source_paths = ["src/birec", "scripts"]
 only_mutate = [
     # The modules the escaped bugs actually lived in: status reporting, the
     # download loop, the live-state machine, and FLV parsing.
