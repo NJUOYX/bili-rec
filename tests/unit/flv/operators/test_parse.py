@@ -21,14 +21,19 @@ from birec.flv.operators import parse
 from birec.flv.operators.typing import FLVStreamItem
 from birec.flv.struct_io import RandomIO
 
-from ..conftest import make_audio_tag, make_flv_bytes, make_video_tag
+from ..conftest import (
+    make_audio_tag,
+    make_flv_bytes,
+    make_flv_header,
+    make_video_tag,
+)
 
 
 class TestParse:
     """Tests for parse operator."""
 
     def test_parse_header(self) -> None:
-        """Test parsing FLV header."""
+        """Test parsing FLV header with precise field assertions."""
         data = make_flv_bytes()
         stream = BytesIO(data)
 
@@ -38,12 +43,34 @@ class TestParse:
         parsed.subscribe(on_next=results.append)
 
         assert len(results) == 1
-        assert isinstance(results[0], FlvHeader)
-        assert results[0].signature == "FLV"
+        header = results[0]
+        assert isinstance(header, FlvHeader)
+        assert header.signature == "FLV"
+        assert header.version == 1
+        assert header.data_offset == 9
+        # Default make_flv_header has both video and audio
+        assert header.has_video() is True
+        assert header.has_audio() is True
+        assert header.type_flag == 0b0000_0101
+
+    def test_parse_header_audio_only(self) -> None:
+        """Header type_flag must reflect the actual streams present."""
+        hdr = make_flv_header(has_video=False, has_audio=True)
+        data = make_flv_bytes(header=hdr)
+        stream = BytesIO(data)
+
+        results: list[FLVStreamItem] = []
+        reactivex.of(stream).pipe(parse()).subscribe(on_next=results.append)
+
+        header = results[0]
+        assert isinstance(header, FlvHeader)
+        assert header.has_video() is False
+        assert header.has_audio() is True
+        assert header.type_flag == 0b0000_0100
 
     def test_parse_video_tag(self) -> None:
-        """Test parsing video tag."""
-        tag = make_video_tag(body=b"\x01\x02\x03")
+        """Test parsing video tag with precise field assertions."""
+        tag = make_video_tag(body=b"\x01\x02\x03", timestamp=42)
         data = make_flv_bytes(tags=[tag])
         stream = BytesIO(data)
 
@@ -55,15 +82,22 @@ class TestParse:
         # Header + video tag + AVC end sequence tag
         assert len(results) == 3
         assert isinstance(results[0], FlvHeader)
-        assert isinstance(results[1], FlvTag)
-        assert results[1].is_video_tag()
+        video = results[1]
+        assert isinstance(video, FlvTag)
+        assert video.is_video_tag()
+        assert video.timestamp == 42
+        assert video.data_size == 5 + 3  # video header + body
+        assert video.body == b"\x01\x02\x03"
         # AVC end sequence tag
-        assert isinstance(results[2], FlvTag)
-        assert results[2].is_video_tag()
+        end_tag = results[2]
+        assert isinstance(end_tag, FlvTag)
+        assert end_tag.is_video_tag()
+        assert is_avc_end_sequence_tag(end_tag)
+        assert end_tag.timestamp == 42
 
     def test_parse_audio_tag(self) -> None:
-        """Test parsing audio tag."""
-        tag = make_audio_tag(body=b"\x04\x05\x06")
+        """Test parsing audio tag with precise field assertions."""
+        tag = make_audio_tag(body=b"\x04\x05\x06", timestamp=77)
         data = make_flv_bytes(tags=[tag])
         stream = BytesIO(data)
 
@@ -75,11 +109,15 @@ class TestParse:
         # Header + audio tag (no AVC end for audio-only)
         assert len(results) == 2
         assert isinstance(results[0], FlvHeader)
-        assert isinstance(results[1], FlvTag)
-        assert results[1].is_audio_tag()
+        audio = results[1]
+        assert isinstance(audio, FlvTag)
+        assert audio.is_audio_tag()
+        assert audio.timestamp == 77
+        assert audio.data_size == 2 + 3  # audio header + body
+        assert audio.body == b"\x04\x05\x06"
 
     def test_parse_multiple_tags(self) -> None:
-        """Test parsing multiple tags."""
+        """Test parsing multiple tags with timestamp ordering."""
         tags = [
             make_video_tag(timestamp=0),
             make_audio_tag(timestamp=0),
@@ -98,10 +136,17 @@ class TestParse:
         assert isinstance(results[0], FlvHeader)
         assert isinstance(results[1], FlvTag)
         assert results[1].is_video_tag()
+        assert results[1].timestamp == 0
         assert isinstance(results[2], FlvTag)
         assert results[2].is_audio_tag()
+        assert results[2].timestamp == 0
         assert isinstance(results[3], FlvTag)
         assert results[3].is_video_tag()
+        assert results[3].timestamp == 100
+        # AVC end sequence inherits last video tag timestamp
+        assert isinstance(results[4], FlvTag)
+        assert is_avc_end_sequence_tag(results[4])
+        assert results[4].timestamp == 100
 
     def test_parse_empty_stream(self) -> None:
         """Test parsing empty stream."""
