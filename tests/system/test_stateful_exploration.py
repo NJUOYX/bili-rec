@@ -62,10 +62,11 @@ the listener for a ``live_began`` that had already been and gone.
 
 Budget: ``derandomize=True`` seeds the search from the test name, so the run
 is the same on every machine and in CI; ``max_examples`` is sized so a green
-run stays a small fraction of the system suite, and a re-introduced #17 is
-still caught (the failing sequence is short, so it surfaces early — the
-exploration reaches the ``disable → enable while live`` pattern within the
-first handful of examples).
+run stays a small fraction of the system suite (~40s out of the suite), while
+every rule — including ``end_live`` — fires at least once under the fixed
+seed. A re-introduced #17 is still caught: the failing sequence is short, so
+it surfaces early — the exploration reaches the ``disable → enable while
+live`` pattern within the first handful of examples.
 """
 
 from __future__ import annotations
@@ -554,7 +555,7 @@ class TestRecorderExploration(RecorderStateMachine.TestCase):
 
 
 TestRecorderExploration.settings = settings(
-    max_examples=8,
+    max_examples=16,
     stateful_step_count=10,
     deadline=None,
     derandomize=True,
