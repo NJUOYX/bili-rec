@@ -17,6 +17,7 @@ Rules (the things a user and a CDN can do):
 - monitor switch: stop / start
 - the CDN drops the connection mid-stream
 - the CDN splices a byte that is not FLV
+- viewers send danmaku
 - let time pass (background work advances, growth windows accumulate)
 
 Invariants (checked after every step):
@@ -26,7 +27,11 @@ Invariants (checked after every step):
 3. recorder enabled + room live ⟹ recording is up within
    ``EVENTUALLY_GRACE``. Rather than betting that the next few steps happen
    to add up to that window, the check spends the window itself, so one
-   invariant call is enough to catch a resume that never comes.
+   invariant call is enough to catch a resume that never comes;
+4. danmaku client connected ⟹ danmaku sent arrives within ``DANMU_GRACE``.
+   The background monitor skips this one because it cannot tell "nothing
+   arrived" from "nothing was sent"; the machine owns the sending side, so
+   the excuse does not apply here.
 
 The two growth invariants are suspended while a segment lies finalized after a
 fault: after bad bytes the recorder honestly stops and waits for a fresh live
@@ -99,6 +104,10 @@ EVENTUALLY_GRACE = 1.0
 # Poll cadence while the stuck check waits out ``EVENTUALLY_GRACE``.
 _STUCK_POLL = 0.05
 
+# How long a danmaku batch sent to a connected client may take to show up in
+# the counter. Delivery is a local WebSocket hop away, so this is generous.
+DANMU_GRACE = 2.0
+
 # One settle after an ordinary step. This is the only clock the machine has —
 # invariant windows accumulate these sleeps — so it is short enough that many
 # steps stay cheap, and the "let time pass" rule provides the longer strides.
@@ -136,6 +145,7 @@ class _Window:
     last_dl: int = 0
     dl_since: float | None = None
     dl_disk: int = 0
+    danmu_expect: int | None = None
 
 
 class RecorderStateMachine(RuleBasedStateMachine):
@@ -400,6 +410,24 @@ class RecorderStateMachine(RuleBasedStateMachine):
         self._note("bad_bytes → finalized")
         self._settle()
 
+    @precondition(
+        lambda self: (
+            (task := self._task()) is not None
+            and task.recorder.is_recording
+            and task._danmaku_client.connected  # noqa: SLF001
+            and self._window.danmu_expect is None
+        )
+    )
+    @rule()
+    def send_danmaku(self) -> None:
+        """Viewers speak; a connected client owes delivery of what they said."""
+        task = self._task()
+        window = self._window
+        window.danmu_expect = task.recorder.stream_recorder.statistics.danmu_total + 1
+        self._run(self._server.send_danmaku("stateful probe"))
+        self._note("send_danmaku")
+        self._settle()
+
     @precondition(lambda self: self._task() is not None)
     @rule()
     def let_time_pass(self) -> None:
@@ -486,6 +514,34 @@ class RecorderStateMachine(RuleBasedStateMachine):
                     f"enabled and live, given {EVENTUALLY_GRACE:.0f}s to start, "
                     "yet nothing is recording",
                 )
+
+        # 4. A client claiming to be connected must actually receive danmaku.
+        # The machine sent one, so delivery is owed — unless the claim is
+        # withdrawn (the client disconnects) or the session that anchored the
+        # counter ends first (recording stops); both cancel the obligation.
+        if window.danmu_expect is not None:
+            stats = task.recorder.stream_recorder.statistics
+            client = task._danmaku_client  # noqa: SLF001
+            deadline = self._loop.time() + DANMU_GRACE
+            while (
+                stats.danmu_total < window.danmu_expect
+                and client.connected
+                and task.recorder.is_recording
+                and self._loop.time() < deadline
+            ):
+                self._run(asyncio.sleep(_STUCK_POLL))
+            if (
+                stats.danmu_total < window.danmu_expect
+                and client.connected
+                and task.recorder.is_recording
+            ):
+                self._fail(
+                    "connected ⟹ danmaku arrives",
+                    "the danmaku client claims it is connected, yet the "
+                    f"danmaku sent just now never arrived within "
+                    f"{DANMU_GRACE:.0f}s",
+                )
+            window.danmu_expect = None
 
 
 class TestRecorderExploration(RecorderStateMachine.TestCase):
