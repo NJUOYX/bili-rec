@@ -13,10 +13,20 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 
 from .fake_bili_server import FakeBiliServer
-from .harness import ROOM_ID, add_task, begin_live, task_of, wait_until
+from .harness import (
+    ROOM_ID,
+    add_task,
+    begin_live,
+    task_of,
+    wait_for_recording,
+    wait_until,
+    wait_until_not_recording,
+    wait_until_recording,
+)
 
 
 async def connected_task(client: AsyncClient) -> Any:
@@ -174,3 +184,48 @@ class TestDanmakuReachesTheRecording:
 
         body = (await client.get(f"/api/v1/tasks/{ROOM_ID}/data")).json()
         assert body["data"]["task_status"]["danmu_total"] == 3
+
+
+class TestLiveCommandsDriveTheMonitor:
+    """LIVE/PREPARING on the broadcast socket flip the room state at once (#27).
+
+    Before the wiring landed, production learned about a broadcast beginning or
+    ending from the periodic check alone — these drive the same transitions
+    through the real socket and watch the state move without any poll in reach.
+    """
+
+    async def test_commands_flip_the_state_without_waiting_for_polling(
+        self,
+        client: AsyncClient,
+        fake_server: FakeBiliServer,
+        out_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Move the periodic channel out of reach for the whole test: if the
+        # flips below came from polling instead of the commands, they could
+        # not arrive inside the wait timeout and the test would fail.
+        monkeypatch.setattr(
+            "birec.bili.live_monitor._PERIODIC_CHECK_INTERVAL", 24 * 3600
+        )
+        task = await connected_task(client)
+        monitor = task._monitor  # noqa: SLF001
+        assert monitor.is_living is False
+
+        fake_server.set_live()
+        await fake_server.send_danmaku_command("LIVE", {})
+
+        await wait_until(
+            lambda: monitor.is_living,
+            what="the LIVE command to flip the monitor",
+        )
+        await wait_until_recording(client)
+        await wait_for_recording(out_dir)
+
+        fake_server.set_offline()
+        await fake_server.send_danmaku_command("PREPARING", {})
+
+        await wait_until(
+            lambda: not monitor.is_living,
+            what="the PREPARING command to flip the monitor back",
+        )
+        await wait_until_not_recording(client)
