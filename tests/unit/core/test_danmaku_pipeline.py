@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from birec.bili.danmaku_client import DanmakuClient
+from birec.bili.live import Live
+from birec.bili.live_monitor import LiveMonitor, LiveMonitorListener
 from birec.core.danmaku_dumper import DanmakuDumper
 from birec.core.danmaku_receiver import DanmakuReceiver
 from birec.core.raw_danmaku_dumper import RawDanmakuDumper
@@ -207,3 +209,220 @@ class TestDumperLifecycle:
 
         lines = (tmp_path / "raw.jsonl").read_text(encoding="utf-8").splitlines()
         assert json.loads(lines[0])["cmd"] == "SEND_GIFT"
+
+
+# ── live-status command forwarding (#27) ─────────────────────────────────────
+
+
+class TestLiveCommandForwarding:
+    """The receiver must hand LIVE/PREPARING/ROUND/ROOM_CHANGE to the handler.
+
+    Before #27 these commands were dropped on the floor, so production learned
+    about broadcasts beginning or ending from the periodic poll alone.
+    """
+
+    @pytest.mark.asyncio
+    async def test_forwards_live_status_commands(self):
+        seen: list[tuple[str, object]] = []
+
+        async def handler(cmd: str, data: object) -> None:
+            seen.append((cmd, data))
+
+        r = DanmakuReceiver(live_command_handler=handler)
+        for cmd in ("LIVE", "PREPARING", "ROUND", "ROOM_CHANGE"):
+            r.on_danmaku({"cmd": cmd, "data": {"room_id": 12345}})
+        await asyncio.sleep(0.01)
+
+        assert seen == [
+            ("LIVE", {"room_id": 12345}),
+            ("PREPARING", {"room_id": 12345}),
+            ("ROUND", {"room_id": 12345}),
+            ("ROOM_CHANGE", {"room_id": 12345}),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_forwards_none_when_payload_is_missing_or_not_a_dict(self):
+        seen: list[tuple[str, object]] = []
+
+        async def handler(cmd: str, data: object) -> None:
+            seen.append((cmd, data))
+
+        r = DanmakuReceiver(live_command_handler=handler)
+        r.on_danmaku({"cmd": "LIVE"})
+        r.on_danmaku({"cmd": "PREPARING", "data": "odd"})
+        await asyncio.sleep(0.01)
+
+        assert seen == [("LIVE", None), ("PREPARING", None)]
+
+    @pytest.mark.asyncio
+    async def test_keeps_arrival_order(self):
+        """The state machine must see the transitions in the order they aired."""
+        seen: list[str] = []
+
+        async def handler(cmd: str, data: object) -> None:
+            seen.append(cmd)
+
+        r = DanmakuReceiver(live_command_handler=handler)
+        r.on_danmaku({"cmd": "LIVE"})
+        r.on_danmaku({"cmd": "PREPARING"})
+        r.on_danmaku({"cmd": "LIVE"})
+        await asyncio.sleep(0.01)
+
+        assert seen == ["LIVE", "PREPARING", "LIVE"]
+
+    def test_no_handler_drops_the_commands_silently(self):
+        """The old behaviour (drop) stays intact when nothing is wired."""
+        r = DanmakuReceiver()
+        r.on_danmaku({"cmd": "LIVE", "data": {}})
+        r.on_danmaku({"cmd": "PREPARING", "data": {}})
+        assert r.queue_size == 0
+
+    @pytest.mark.asyncio
+    async def test_live_commands_never_enter_the_record_queue(self):
+        async def handler(cmd: str, data: object) -> None:
+            pass
+
+        r = DanmakuReceiver(live_command_handler=handler)
+        r.on_danmaku({"cmd": "LIVE", "data": {}})
+        await asyncio.sleep(0.01)
+        assert r.queue_size == 0
+        assert r.get_nowait() is None
+
+    @pytest.mark.asyncio
+    async def test_recordable_commands_are_not_forwarded(self):
+        seen: list[str] = []
+
+        async def handler(cmd: str, data: object) -> None:
+            seen.append(cmd)
+
+        r = DanmakuReceiver(live_command_handler=handler)
+        r.on_danmaku(_DANMU_MSG)
+        r.on_danmaku(_SEND_GIFT)
+        await asyncio.sleep(0.01)
+
+        assert seen == []
+        # Still queued for the dumper as before.
+        assert r.queue_size == 2
+
+    @pytest.mark.asyncio
+    async def test_handler_failure_does_not_break_the_receiver(self):
+        calls: list[str] = []
+
+        async def exploding(cmd: str, data: object) -> None:
+            calls.append(cmd)
+            raise RuntimeError("boom")
+
+        r = DanmakuReceiver(live_command_handler=exploding)
+        r.on_danmaku({"cmd": "LIVE"})
+        r.on_danmaku({"cmd": "PREPARING"})
+        await asyncio.sleep(0.01)
+
+        # Both commands still reached the handler, and the receiver works on.
+        assert calls == ["LIVE", "PREPARING"]
+        r.on_danmaku(_DANMU_MSG)
+        assert r.queue_size == 1
+
+
+class _RecordingListener(LiveMonitorListener):
+    """Collects the monitor's events so the tests can read the sequence."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def on_live_began(self, live: Live) -> None:
+        self.events.append("live_began")
+
+    def on_live_ended(self, live: Live) -> None:
+        self.events.append("live_ended")
+
+    def on_live_stream_available(self, live: Live) -> None:
+        self.events.append("live_stream_available")
+
+    def on_live_stream_reset(self, live: Live) -> None:
+        self.events.append("live_stream_reset")
+
+    def on_room_changed(self, live: Live) -> None:
+        self.events.append("room_changed")
+
+
+def _make_wired_monitor() -> tuple[LiveMonitor, _RecordingListener, DanmakuReceiver]:
+    """A real receiver whose live commands feed a real monitor."""
+    live = Live(12345, session=MagicMock(), api_platform="web")
+    monitor = LiveMonitor(live)
+    listener = _RecordingListener()
+    monitor.add_listener(listener)
+    receiver = DanmakuReceiver(live_command_handler=monitor.handle_command)
+    return monitor, listener, receiver
+
+
+class TestLiveCommandsReachTheMonitor:
+    """Receiver wired to a real LiveMonitor: the instant begin/end channel."""
+
+    @pytest.mark.asyncio
+    async def test_live_command_flips_the_monitor(self):
+        monitor, listener, receiver = _make_wired_monitor()
+        with (
+            patch.object(monitor, "_periodic_check_loop", new=AsyncMock()),
+            patch.object(monitor, "_start_stream_poll"),
+        ):
+            monitor.enable()
+            receiver.on_danmaku({"cmd": "LIVE"})
+            await asyncio.sleep(0.01)
+
+        assert monitor.is_living is True
+        assert listener.events == ["live_began"]
+        monitor.disable()
+
+    @pytest.mark.asyncio
+    async def test_preparing_command_flips_it_back(self):
+        monitor, listener, receiver = _make_wired_monitor()
+        with (
+            patch.object(monitor, "_periodic_check_loop", new=AsyncMock()),
+            patch.object(monitor, "_start_stream_poll"),
+        ):
+            monitor.enable()
+            receiver.on_danmaku({"cmd": "LIVE"})
+            await asyncio.sleep(0.01)
+            receiver.on_danmaku({"cmd": "PREPARING"})
+            await asyncio.sleep(0.01)
+
+        assert monitor.is_living is False
+        assert listener.events == ["live_began", "live_ended"]
+        monitor.disable()
+
+    @pytest.mark.asyncio
+    async def test_room_change_reaches_the_monitor(self):
+        monitor, listener, receiver = _make_wired_monitor()
+        with patch.object(monitor, "_periodic_check_loop", new=AsyncMock()):
+            monitor.enable()
+            receiver.on_danmaku({"cmd": "ROOM_CHANGE"})
+            await asyncio.sleep(0.01)
+
+        assert listener.events == ["room_changed"]
+        monitor.disable()
+
+    @pytest.mark.asyncio
+    async def test_repeated_commands_do_not_duplicate_begin_or_end(self):
+        """Commands and polling can both report a transition; the state machine
+        must stay idempotent: began/ended fire on the flip only, never twice.
+        """
+        monitor, listener, receiver = _make_wired_monitor()
+        with (
+            patch.object(monitor, "_periodic_check_loop", new=AsyncMock()),
+            patch.object(monitor, "_start_stream_poll"),
+        ):
+            monitor.enable()
+            receiver.on_danmaku({"cmd": "LIVE"})
+            await asyncio.sleep(0.01)
+            # A second LIVE is a stream restart, not a second broadcast start.
+            receiver.on_danmaku({"cmd": "LIVE"})
+            await asyncio.sleep(0.01)
+            receiver.on_danmaku({"cmd": "PREPARING"})
+            await asyncio.sleep(0.01)
+            # A second PREPARING is a no-op once the room already went dark.
+            receiver.on_danmaku({"cmd": "PREPARING"})
+            await asyncio.sleep(0.01)
+
+        assert listener.events == ["live_began", "live_stream_reset", "live_ended"]
+        assert monitor.is_living is False
+        monitor.disable()

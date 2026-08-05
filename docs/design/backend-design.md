@@ -198,7 +198,7 @@ bili-rec/
 - `stream_recorder.py`：`StreamRecorder` 门面。**FLV↔fMP4 自动回退**（无 FLV→fmp4；fmp4 超时→flv）+ 实现热切换；追踪真实格式/画质；独立线程运行 Rx 管道 + 按房间日志上下文；`malloc_trim`。
 - `flv_stream_recorder_impl.py`：FLV Rx 管道（解析URL→拉流→录制监控→统计→解析→异常处理→process→注入/分析→落盘→统计）。**移除** Cutter、Limiter。
 - `hls_stream_recorder_impl.py`：fMP4/HLS Rx 管道（拉播放列表→解析新分片→独立下载线程→拉分片→探测/分析→分片落盘→播放列表落盘）。**移除** Cutter、Limiter。
-- 弹幕：`DanmakuReceiver`（解析 DANMU_MSG/SEND_GIFT/GUARD_BUY/SUPER_CHAT/USER_TOAST，有界队列 2000 丢旧）；`DanmakuDumper`（XML + 元数据头；礼物/免费礼物/上舰/SC/Toast 开关；含用户名开关；时间轴校正；重试）；`RawDanmaku*`（JSONL）。
+- 弹幕：`DanmakuReceiver`（解析 DANMU_MSG/SEND_GIFT/GUARD_BUY/SUPER_CHAT/USER_TOAST，有界队列 2000 丢旧；LIVE/PREPARING/ROUND/ROOM_CHANGE 不落盘，转发给 `LiveMonitor.handle_command`，即 §3.3 的即时开停通道）；`DanmakuDumper`（XML + 元数据头；礼物/免费礼物/上舰/SC/Toast 开关；含用户名开关；时间轴校正；重试）；`RawDanmaku*`（JSONL）。
 - `cover_downloader.py`：下载 + sha1 去重 + 重试。
 - 支撑：`MetadataProvider`、`PathProvider`、`StreamParamHolder`（画质回退/平台轮换/备用流）、`Statistics`；`models.py`（弹幕消息模型）。
 - `operators/`：`StreamURLResolver`（缓存/HEAD 复用/画质回退/失败复查）、`StreamFetcher`、`StreamParser`、`RecordingMonitor`（中断/恢复）、`ConnectionErrorHandler`（600s 容忍）、`RequestExceptionHandler`、`ExceptionHandler`（磁盘满/房间异常优雅完成）、`ProgressBar`、`StreamStatistics/SizedStatistics`。

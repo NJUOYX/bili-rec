@@ -448,6 +448,92 @@ class TestPeriodicCheck:
         assert sleep_calls[0] == pytest.approx(100 + expected_jitter)
 
 
+class TestCommandAndPollingInterleaving:
+    """Two channels see the same transition; events must fire exactly once.
+
+    The danmaku commands are the instant channel, the periodic poll the
+    fallback. Both can report the same change — the state machine must not
+    be seen to jitter when the second channel arrives late (#27).
+    """
+
+    async def test_polling_confirming_a_live_command_is_a_noop(self) -> None:
+        monitor, live = _make_monitor()
+        listener = _RecordingListener()
+        monitor.add_listener(listener)
+        monitor.enable()
+
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(monitor, "_start_stream_poll"),
+        ):
+            await monitor.handle_command("LIVE")
+            m.return_value = LiveStatus.LIVE
+            await monitor._check_status()
+
+        assert listener.events == ["live_began"]
+        assert monitor.is_living is True
+        monitor.disable()
+
+    async def test_polling_confirming_a_preparing_command_is_a_noop(self) -> None:
+        monitor, live = _make_monitor()
+        listener = _RecordingListener()
+        monitor.add_listener(listener)
+        monitor.enable()
+
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(monitor, "_start_stream_poll"),
+        ):
+            await monitor.handle_command("LIVE")
+            await monitor.handle_command("PREPARING")
+            m.return_value = LiveStatus.PREPARING
+            await monitor._check_status()
+
+        assert listener.events == ["live_began", "live_ended"]
+        assert monitor.is_living is False
+        monitor.disable()
+
+    async def test_live_command_after_polling_began_is_a_stream_reset(self) -> None:
+        """Once polling already reports the broadcast, a LIVE command can only
+        mean the stream restarted — a room cannot begin the same broadcast
+        twice, so no second ``live_began`` may come out of it.
+        """
+        monitor, live = _make_monitor()
+        listener = _RecordingListener()
+        monitor.add_listener(listener)
+        monitor.enable()
+
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(monitor, "_start_stream_poll"),
+        ):
+            m.return_value = LiveStatus.LIVE
+            await monitor._check_status()
+            await monitor.handle_command("LIVE")
+
+        assert listener.events == ["live_began", "live_stream_reset"]
+        monitor.disable()
+
+    async def test_preparing_command_after_polling_ended_is_a_noop(self) -> None:
+        monitor, live = _make_monitor()
+        listener = _RecordingListener()
+        monitor.add_listener(listener)
+        monitor.enable()
+        monitor._is_living = True
+
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(monitor, "_start_stream_poll"),
+        ):
+            m.return_value = LiveStatus.PREPARING
+            await monitor._check_status()
+            await monitor.handle_command("PREPARING")
+
+        assert listener.events == ["live_ended"]
+        assert monitor.is_living is False
+        monitor.disable()
+
+
 class TestReconnectRepair:
     async def test_repair_detects_live(self) -> None:
         monitor, live = _make_monitor()
