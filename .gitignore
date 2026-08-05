@@ -22,6 +22,8 @@ coverage.xml
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
+.stateful_tmp/
 
 # IDE / OS
 .qoder/
