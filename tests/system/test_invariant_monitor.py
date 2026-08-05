@@ -14,7 +14,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from httpx import AsyncClient
 
+from birec.task import RecordTask, RunningStatus
+
+from .harness import wait_until_async
 from .invariant_monitor import EVENTUALLY_GRACE, GROWTH_GRACE, InvariantMonitor
 
 
@@ -278,3 +282,37 @@ def test_the_graces_fit_inside_the_harness_budgets() -> None:
     after the test has already given up waiting."""
     assert 1.0 < GROWTH_GRACE < 20.0
     assert GROWTH_GRACE < EVENTUALLY_GRACE < 20.0
+
+
+class TestTheWiringEndToEnd:
+    """The conftest fixture, exercised against a real application."""
+
+    async def test_the_monitor_catches_a_task_lying_about_recording(
+        self,
+        client: AsyncClient,
+        invariant_monitor: InvariantMonitor,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Force the status to claim recording while the disk stays empty:
+        exactly the class-A lie, induced instead of waiting for a regression.
+        The monitor has to catch it without any help from this test's own
+        assertions."""
+        monkeypatch.setattr(
+            RecordTask,
+            "running_status",
+            property(lambda self: RunningStatus.RECORDING),
+        )
+        await client.post("/api/v1/tasks/12345", json={"room_id": 12345})
+
+        async def _caught() -> bool:
+            return bool(invariant_monitor.violations)
+
+        await wait_until_async(
+            _caught,
+            timeout=GROWTH_GRACE + 5.0,
+            what="the monitor to catch the induced lie",
+        )
+        # Clear the slate so the autouse fixture's teardown does not fail this
+        # test over a violation it induced on purpose.
+        assert any("recording" in v.invariant for v in invariant_monitor.violations)
+        invariant_monitor.violations.clear()
