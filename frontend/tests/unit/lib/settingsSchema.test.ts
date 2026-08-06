@@ -42,6 +42,15 @@ describe('SETTINGS_GROUPS', () => {
   })
 })
 
+describe('output.pathTemplate 字段（#37）', () => {
+  it('使用专用 pathTemplate 控件且任务级可覆盖', () => {
+    const output = SETTINGS_GROUPS.find((g) => g.key === 'output')
+    const field = output?.fields.find((f) => f.key === 'pathTemplate')
+    expect(field?.type).toBe('pathTemplate')
+    expect(field?.taskOverridable).toBe(true)
+  })
+})
+
 describe('TASK_SETTINGS_GROUPS', () => {
   it('仅含 taskOverridable 字段，且不含纯全局字段 outDir', () => {
     const allFields = TASK_SETTINGS_GROUPS.flatMap((g) => g.fields)
