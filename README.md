@@ -191,8 +191,11 @@ version = "1.0"
 tasks = []
 
 [output]
-# 输出路径模板，支持变量：{roomid} {uname} {year} {month} {day} {hour} {minute} {second}
-pathTemplate = "{roomid} - {uname}/blive_{roomid}_{year}-{month}-{day}-{hour}{minute}{second}"
+# 输出路径模板，支持变量：{roomid} {uname} {title} {area} {parent_area}
+# {year} {month} {day} {hour} {minute} {second}。每段路径至少含一个变量。
+# 默认按「主播/月份/开播场次」组织，每场直播一个独立场次目录；
+# 弹幕与元数据旁车会自动归入场次目录下的 meta/ 子目录（见「输出目录结构」）。
+pathTemplate = "{roomid} - {uname}/{year}-{month}/{year}-{month}-{day}_{hour}{minute}{second}/blive_{roomid}"
 outDir = "recordings"
 
 [logging]
@@ -225,6 +228,34 @@ danmakuToAss = false     # 弹幕转 ASS 字幕
 checkInterval = 60       # 磁盘空间检查间隔（秒）
 spaceThreshold = 1073741824  # 磁盘空间阈值（字节，默认 1GB）
 ```
+
+### 输出目录结构
+
+默认模板下，每场直播对应一个独立的**场次目录**，产物按如下方式组织：
+
+```text
+recordings/
+└── 123456 - 某主播/                     # {roomid} - {uname}
+    └── 2026-07/                         # {year}-{month}
+        └── 2026-07-25_200000/           # 场次目录：{year}-{month}-{day}_{hour}{minute}{second}
+            ├── blive_123456.mp4         # 视频（remux 后）
+            ├── blive_123456.ass         # 弹幕字幕（与视频同目录，播放器可自动加载）
+            └── meta/                    # 弹幕与元数据旁车
+                ├── blive_123456.xml     # 弹幕
+                ├── blive_123456.jsonl   # 原始弹幕（saveRawDanmaku 开启时）
+                ├── blive_123456.jpg     # 封面
+                └── blive_123456.meta.json  # 元数据注入中间文件（后处理成功后自动删除）
+```
+
+要点：
+
+- **视频与 ASS 字幕留在场次目录顶层**，保证播放器能自动加载同名字幕；
+  其余描述性文件（弹幕 XML / 原始弹幕 JSONL / 封面 / `.meta.json`）归入 `meta/` 子目录。
+- 录制中间产物 `.flv`/`.m4s` 与 ffmpeg 元数据文件 `.meta` 在后处理成功后自动删除
+  （AUTO 策略），无需手工清理。
+- 旧版本录制的扁平文件（视频与弹幕同目录）不受影响，可继续使用；空间回收对两种
+  布局均有效。如需整理历史产物，只需按上述结构手动移动对应文件即可，bili-rec
+  不提供自动迁移工具。
 
 ### 环境变量
 
