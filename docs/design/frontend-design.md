@@ -111,7 +111,7 @@ frontend/
 - **统一响应体**：后端返回 `ResponseMessage{ code:int=0, message:str, data?:object }`。客户端在 `api/client.ts` 统一拆包：`code !== 0` 抛出携带 `message` 的错误；成功则返回 `data`。
 - **分页**：`GET /tasks/data` 接受 `page`/`size`/`select`，前端筛选器（all / 直播状态 / 任务状态 / 运行状态）映射为 `select` 参数。
 - **错误码**：`404`/`403` 由后端异常处理器返回统一体；前端据 `code` 分类为「未找到 / 禁止 / 业务错误 / 网络错误」并弹 toast。
-- **契约冻结点**：以 `openapi.json` 的 `info.version`（当前 `0.1.0`）为对接基线；后端契约变更须走 PR 并重新生成前端类型（§5）。
+- **契约冻结点**：以 `openapi.json` 的 `info.version`（当前 `0.1.1`）为对接基线；后端契约变更须走 PR 并重新生成前端类型（§5）。
 
 ---
 

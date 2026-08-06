@@ -13,6 +13,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # hatchling reads the version from src/birec/__init__.py, never from
+      # the git tag — a tag bump alone ships artifacts under the old name.
+      - name: Verify tag matches package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          tag="${TAG#v}"
+          pkg=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/birec/__init__.py)
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $TAG but package version is $pkg — bump src/birec/__init__.py first"
+            exit 1
+          fi
+
       # The wheel has to carry the web UI: without it `pip install birec`
       # silently serves an API with no interface, because the app mounts the
       # frontend only when it finds one.
