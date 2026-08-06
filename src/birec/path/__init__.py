@@ -15,6 +15,7 @@ __all__ = (
     "SIDECAR_EXTENSIONS",
     "META_SUBDIR_NAME",
     "META_SUBDIR_EXTENSIONS",
+    "PATH_TEMPLATE_PRESETS",
 )
 
 # Valid template variables
@@ -44,6 +45,17 @@ META_SUBDIR_NAME = "meta"
 # .ass stays beside the video for player auto-loading, and .meta is an ffmpeg
 # intermediate file the postprocessor auto-deletes beside the video.
 META_SUBDIR_EXTENSIONS = frozenset({".xml", ".jsonl", ".jpg", ".png", ".meta.json"})
+
+# Path templates the settings UI offers as presets (#37). The first one is the
+# default: one dated session directory per broadcast, grouped by room and month.
+# The last one is the legacy flat layout so existing users can switch back with
+# one click. Keep in sync with PATH_TEMPLATE_PRESETS in the frontend.
+PATH_TEMPLATE_PRESETS: tuple[str, ...] = (
+    "{roomid} - {uname}/{year}-{month}/"
+    "{year}-{month}-{day}_{hour}{minute}{second}/blive_{roomid}",
+    "{uname}/{year}-{month}/{year}-{month}-{day}_{hour}{minute}{second}/blive_{roomid}",
+    "{roomid} - {uname}/blive_{roomid}_{year}-{month}-{day}-{hour}{minute}{second}",
+)
 
 # Characters not allowed in file paths
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')

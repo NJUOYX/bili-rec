@@ -10,12 +10,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from birec.path import (
     META_SUBDIR_EXTENSIONS,
     META_SUBDIR_NAME,
+    PATH_TEMPLATE_PRESETS,
     SIDECAR_EXTENSIONS,
     derive_path,
+    validate_template,
 )
+from birec.setting.models import OutputSettings
 
 
 class TestDerivePathLayout:
@@ -75,3 +81,31 @@ class TestDerivePathLayout:
 
     def test_meta_subdir_name(self) -> None:
         assert META_SUBDIR_NAME == "meta"
+
+
+class TestPathTemplatePresets:
+    """The presets the settings UI offers must all be usable as-is (#37)."""
+
+    def test_presets_are_unique(self) -> None:
+        assert len(set(PATH_TEMPLATE_PRESETS)) == len(PATH_TEMPLATE_PRESETS)
+
+    def test_every_preset_uses_only_known_variables(self) -> None:
+        for preset in PATH_TEMPLATE_PRESETS:
+            assert validate_template(preset), preset
+
+    def test_every_preset_passes_settings_validation(self) -> None:
+        for preset in PATH_TEMPLATE_PRESETS:
+            try:
+                OutputSettings(path_template=preset)
+            except ValidationError:
+                pytest.fail(f"preset rejected by settings validation: {preset}")
+
+    def test_default_preset_organizes_by_session(self) -> None:
+        """The first preset is the default and groups one broadcast into its
+        own dated session directory under the room."""
+        default = PATH_TEMPLATE_PRESETS[0]
+        assert OutputSettings().path_template == default
+        assert default == (
+            "{roomid} - {uname}/{year}-{month}/"
+            "{year}-{month}-{day}_{hour}{minute}{second}/blive_{roomid}"
+        )
