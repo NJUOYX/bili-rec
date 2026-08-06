@@ -85,3 +85,63 @@ jobs:
           # Otherwise the release body is empty, which for a first release is
           # the only thing a visitor has to go on.
           generate_release_notes: true
+
+  # Pull what was just pushed and record against it (#19 方案 4): the only
+  # place the push:true path is exercised — image name, manifest, and the
+  # artifact itself. PR smoke tests a locally built image; this one tests
+  # the release.
+  smoke:
+    needs: build-and-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute the published image name
+        id: image
+        env:
+          REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          repo=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${repo}:${REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the published image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: docker pull "$IMAGE"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+
+      - name: Build fake-bili on top of the published image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          docker build -f tests/smoke_e2e/Dockerfile.fake-bili \
+            -t fake-bili:ci --build-arg BASE_IMAGE="$IMAGE" .
+
+      - name: Run publish-artifact smoke against the release
+        env:
+          BIREC_IMAGE: ${{ steps.image.outputs.name }}
+        run: uv run pytest tests/smoke_e2e -m smoke -v --basetemp .smoke-tmp
+
+      - name: Upload smoke evidence (logs + recordings) on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke-evidence
+          path: .smoke-tmp
+          if-no-files-found: ignore
