@@ -308,33 +308,40 @@ class TestPathProvider:
 
     def test_danmaku_path(self, tmp_path):
         pp = PathProvider(str(tmp_path), "test")
-        result = pp.danmaku_path("/path/to/video.flv")
-        assert result == "/path/to/video.xml"
+        video = tmp_path / "session" / "video.flv"
+        result = pp.danmaku_path(str(video))
+        assert result == str(tmp_path / "session" / "meta" / "video.xml")
+        assert (video.parent / "meta").is_dir()
 
     def test_raw_danmaku_path(self, tmp_path):
         pp = PathProvider(str(tmp_path), "test")
-        result = pp.raw_danmaku_path("/path/to/video.flv")
-        assert result == "/path/to/video.jsonl"
+        video = tmp_path / "session" / "video.flv"
+        result = pp.raw_danmaku_path(str(video))
+        assert result == str(tmp_path / "session" / "meta" / "video.jsonl")
 
     def test_cover_path(self, tmp_path):
         pp = PathProvider(str(tmp_path), "test")
-        result = pp.cover_path("/path/to/video.flv")
-        assert result == "/path/to/video.jpg"
+        video = tmp_path / "session" / "video.flv"
+        result = pp.cover_path(str(video))
+        assert result == str(tmp_path / "session" / "meta" / "video.jpg")
 
     def test_cover_path_custom_ext(self, tmp_path):
         pp = PathProvider(str(tmp_path), "test")
-        result = pp.cover_path("/path/to/video.flv", ".png")
-        assert result == "/path/to/video.png"
+        video = tmp_path / "session" / "video.flv"
+        result = pp.cover_path(str(video), ".png")
+        assert result == str(tmp_path / "session" / "meta" / "video.png")
 
     def test_meta_path(self, tmp_path):
+        """The ffmpeg .meta intermediate file stays beside the video (#37)."""
         pp = PathProvider(str(tmp_path), "test")
-        result = pp.meta_path("/path/to/video.flv")
-        assert result == "/path/to/video.meta"
+        result = pp.meta_path(str(tmp_path / "session" / "video.flv"))
+        assert result == str(tmp_path / "session" / "video.meta")
 
     def test_meta_json_path(self, tmp_path):
         pp = PathProvider(str(tmp_path), "test")
-        result = pp.meta_json_path("/path/to/video.flv")
-        assert result == "/path/to/video.meta.json"
+        video = tmp_path / "session" / "video.flv"
+        result = pp.meta_json_path(str(video))
+        assert result == str(tmp_path / "session" / "meta" / "video.meta.json")
 
     def test_out_dir_property(self, tmp_path):
         pp = PathProvider(str(tmp_path), "test")

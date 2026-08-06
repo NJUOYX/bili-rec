@@ -16,6 +16,7 @@ from pydantic import ConfigDict, Field, field_validator
 
 from birec.bili.typing import QualityNumber, StreamFormat
 from birec.logging.typing import LOG_LEVEL
+from birec.path import PATH_TEMPLATE_PRESETS
 from birec.setting.typing import CoverSaveStrategy, RecordingMode
 from birec.utils.string import camel_case
 
@@ -184,9 +185,9 @@ class OutputOptions(BaseModel):
 
 class OutputSettings(OutputOptions):
     out_dir: str = DEFAULT_OUT_DIR
-    path_template: str = (
-        "{roomid} - {uname}/blive_{roomid}_{year}-{month}-{day}-{hour}{minute}{second}"
-    )
+    # New deployments organize one broadcast into its own dated session
+    # directory (#37); an existing config.toml keeps whatever it persists.
+    path_template: str = PATH_TEMPLATE_PRESETS[0]
 
 
 class PostprocessingOptions(BaseModel):

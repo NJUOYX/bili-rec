@@ -7,7 +7,13 @@
  */
 
 export type FieldType =
-  'text' | 'textarea' | 'switch' | 'number' | 'select' | 'stringList'
+  | 'text'
+  | 'textarea'
+  | 'switch'
+  | 'number'
+  | 'select'
+  | 'stringList'
+  | 'pathTemplate'
 
 export interface SelectOption {
   value: string | number
@@ -237,9 +243,9 @@ export const SETTINGS_GROUPS: GroupDescriptor[] = [
       {
         key: 'pathTemplate',
         label: '路径模板',
-        type: 'text',
+        type: 'pathTemplate',
         taskOverridable: true,
-        help: '支持 {roomid} {uname} {year} 等占位符',
+        help: '支持 {roomid} {uname} {title} {area} {parent_area} {year} {month} {day} {hour} {minute} {second} 占位符；每段路径至少含一个占位符。弹幕与元数据归入场次目录下的 meta/ 子目录',
       },
     ],
   },

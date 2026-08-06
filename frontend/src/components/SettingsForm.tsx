@@ -16,6 +16,9 @@ import {
   Typography,
 } from 'antd'
 
+import { PathTemplateField } from './PathTemplateField'
+import { isValidPathTemplate } from '../lib/pathTemplate'
+
 import type { FieldDescriptor, GroupDescriptor } from '../lib/settingsSchema'
 
 export interface SettingsFormProps {
@@ -81,10 +84,35 @@ function renderControl(
           placeholder={ph ?? '输入后回车添加'}
         />
       )
+    case 'pathTemplate':
+      return <PathTemplateField placeholder={ph} />
     case 'text':
     default:
       return <Input placeholder={ph} />
   }
+}
+
+/** 按字段类型生成 AntD 校验规则；空值一律放行（任务级 null = 回退全局）。 */
+function fieldRules(field: FieldDescriptor) {
+  if (field.type === 'number' && (field.min != null || field.max != null)) {
+    return [{ type: 'number' as const, min: field.min, max: field.max }]
+  }
+  if (field.type === 'pathTemplate') {
+    return [
+      {
+        validator: (_: unknown, value: unknown) => {
+          if (value == null || value === '') return Promise.resolve()
+          if (typeof value === 'string' && isValidPathTemplate(value)) {
+            return Promise.resolve()
+          }
+          return Promise.reject(
+            new Error('每段路径须至少含一个合法占位符，且不含非法字符'),
+          )
+        },
+      },
+    ]
+  }
+  return undefined
 }
 
 export function SettingsForm({
@@ -122,12 +150,7 @@ export function SettingsForm({
               help={field.help}
               extra={inheritHint}
               valuePropName={field.type === 'switch' ? 'checked' : 'value'}
-              rules={
-                field.type === 'number' &&
-                (field.min != null || field.max != null)
-                  ? [{ type: 'number', min: field.min, max: field.max }]
-                  : undefined
-              }
+              rules={fieldRules(field)}
             >
               {renderControl(field, inherited)}
             </Form.Item>

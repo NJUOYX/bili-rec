@@ -370,20 +370,29 @@ class TestRecordTaskPostprocessingWiring:
         self._segment_listener(comps)(
             CompletedSegment(
                 video_path="/rec/a.flv",
-                danmaku_path="/rec/a.xml",
-                raw_danmaku_path="/rec/a.jsonl",
+                danmaku_path="/rec/meta/a.xml",
+                raw_danmaku_path="/rec/meta/a.jsonl",
             )
         )
 
         args, kwargs = comps["postprocessor"].submit.call_args
         assert args == (Path("/rec/a.flv"), Path("/rec/a.mp4"))
-        assert kwargs["related_files"] == [Path("/rec/a.xml"), Path("/rec/a.jsonl")]
+        # #37: the ffmpeg .meta file rides along so AUTO delete can clean it.
+        assert kwargs["related_files"] == [
+            Path("/rec/meta/a.xml"),
+            Path("/rec/meta/a.jsonl"),
+            Path("/rec/a.meta"),
+        ]
 
-    def test_segment_without_danmaku_submits_video_only(self) -> None:
+    def test_segment_without_danmaku_submits_video_and_meta_only(self) -> None:
+        """Even without danmaku the .meta intermediate file is always written
+        at recording start, so it is always handed over for cleanup (#37)."""
         task, comps = _make_task()
         self._segment_listener(comps)(CompletedSegment(video_path="/rec/a.flv"))
 
-        assert comps["postprocessor"].submit.call_args.kwargs["related_files"] == []
+        assert comps["postprocessor"].submit.call_args.kwargs["related_files"] == [
+            Path("/rec/a.meta")
+        ]
 
     def test_segment_without_video_is_not_submitted(self) -> None:
         task, comps = _make_task()

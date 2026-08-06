@@ -130,7 +130,6 @@ birec.flv.struct_io.StructWriter.write_ui16  # binary struct IO toolkit; pinned 
 birec.flv.utils.format_timestamp  # flv toolkit surface; pinned by tests
 birec.logging.context.async_task_with_logger_context  # log-context task helper never used in src; pinned by tests
 birec.path.deduplicate_path  # path template toolkit; production PathProvider renders without these helpers
-birec.path.derive_path  # path template toolkit; pinned by tests
 birec.path.render_template  # path template toolkit; pinned by tests
 birec.path.validate_template  # path template toolkit; pinned by tests
 birec.postprocess.remux.parse_ffmpeg_size  # remux helper for reading ffmpeg progress; pinned by tests

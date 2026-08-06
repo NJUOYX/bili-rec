@@ -27,6 +27,11 @@ def test_defaults_match_design() -> None:
     assert s.danmaku.record_toast is True
     assert s.space.space_threshold == 1024**3
     assert s.bili_api.base_api_urls == ["https://api.bilibili.com"]
+    # #37: the default template organizes one broadcast into its own session dir
+    assert s.output.path_template == (
+        "{roomid} - {uname}/{year}-{month}/"
+        "{year}-{month}-{day}_{hour}{minute}{second}/blive_{roomid}"
+    )
 
 
 def test_camel_case_alias_roundtrip() -> None:
