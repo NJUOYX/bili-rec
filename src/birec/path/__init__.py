@@ -13,6 +13,8 @@ __all__ = (
     "deduplicate_path",
     "TEMPLATE_PATTERN",
     "SIDECAR_EXTENSIONS",
+    "META_SUBDIR_NAME",
+    "META_SUBDIR_EXTENSIONS",
 )
 
 # Valid template variables
@@ -32,6 +34,16 @@ SIDECAR_EXTENSIONS = {
     ".meta",
     ".meta.json",
 }
+
+# Name of the subdirectory that groups the danmaku/metadata sidecars of one
+# session (#37): the video and its ASS subtitle stay in the session directory
+# (so players auto-load the subtitle), everything descriptive moves to meta/.
+META_SUBDIR_NAME = "meta"
+
+# Sidecar extensions tiered into META_SUBDIR_NAME under the video directory.
+# .ass stays beside the video for player auto-loading, and .meta is an ffmpeg
+# intermediate file the postprocessor auto-deletes beside the video.
+META_SUBDIR_EXTENSIONS = frozenset({".xml", ".jsonl", ".jpg", ".png", ".meta.json"})
 
 # Characters not allowed in file paths
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -86,7 +98,12 @@ def render_template(template: str, **kwargs: str | int) -> str:
 
 
 def derive_path(base_path: Path, extension: str) -> Path:
-    """Derive a sidecar file path from a base path.
+    """Derive a sidecar file path from a video path.
+
+    Danmaku and metadata sidecars (extensions in ``META_SUBDIR_EXTENSIONS``)
+    are tiered into the ``meta/`` subdirectory of the video's directory;
+    subtitles (``.ass``) and the ffmpeg intermediate file (``.meta``) stay
+    beside the video itself (#37).
 
     Args:
         base_path: Base file path (e.g., recording.flv).
@@ -95,9 +112,10 @@ def derive_path(base_path: Path, extension: str) -> Path:
     Returns:
         Sidecar path with the new extension.
     """
-    if extension == ".meta.json":
-        return base_path.with_suffix("").with_suffix(".meta.json")
-    return base_path.with_suffix(extension)
+    name = base_path.stem + extension
+    if extension in META_SUBDIR_EXTENSIONS:
+        return base_path.parent / META_SUBDIR_NAME / name
+    return base_path.parent / name
 
 
 def deduplicate_path(path: Path) -> Path:

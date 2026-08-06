@@ -83,6 +83,28 @@ class TestSpaceReclaimer:
         assert reclaimed == 1000
         assert not old_file.exists()
 
+    def test_find_reclaimable_in_nested_session_dirs(self, tmp_path) -> None:
+        """Regression (#37): recordings now live in per-session subdirectories
+        with a meta/ tier, and the reclaimer must still find old files there —
+        a non-recursive scan would silently leak them past the TTL.
+        """
+        import os
+
+        old_time = time.time() - 48 * 3600
+        session = tmp_path / "123 - streamer" / "2026-07" / "2026-07-25_200000"
+        (session / "meta").mkdir(parents=True)
+        video = session / "blive_123.flv"
+        video.write_bytes(b"data")
+        xml = session / "meta" / "blive_123.xml"
+        xml.write_bytes(b"<i/>")
+        for path in (video, xml):
+            os.utime(path, (old_time, old_time))
+
+        reclaimer = SpaceReclaimer([tmp_path], rec_ttl=24 * 3600)
+        files = reclaimer.find_reclaimable_files()
+        assert video in files
+        assert xml in files
+
 
 class TestEscapePath:
     def test_basic(self) -> None:
@@ -121,7 +143,7 @@ class TestRenderTemplate:
 class TestDerivePath:
     def test_xml(self) -> None:
         base = Path("/recordings/stream.flv")
-        assert derive_path(base, ".xml") == Path("/recordings/stream.xml")
+        assert derive_path(base, ".xml") == Path("/recordings/meta/stream.xml")
 
     def test_ass(self) -> None:
         base = Path("/recordings/stream.flv")
@@ -130,7 +152,7 @@ class TestDerivePath:
     def test_meta_json(self) -> None:
         base = Path("/recordings/stream.flv")
         result = derive_path(base, ".meta.json")
-        assert result.name == "stream.meta.json"
+        assert result == Path("/recordings/meta/stream.meta.json")
 
 
 class TestDeduplicatePath:

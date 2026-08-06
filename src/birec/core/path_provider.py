@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from ..bili.models import RoomInfo, UserInfo
+from ..path import derive_path
 
 __all__ = ("PathProvider",)
 
@@ -121,22 +123,36 @@ class PathProvider:
         base = self.render(now)
         return self.dedup(base, ".flv")
 
+    def _meta_sidecar_path(self, video_path: str, extension: str) -> str:
+        """Derive a danmaku/metadata sidecar path in the session's ``meta/``.
+
+        Creates the ``meta/`` directory: the dumpers open their files right
+        after the path is handed to them (#37).
+        """
+        path = derive_path(Path(video_path), extension)
+        os.makedirs(path.parent, exist_ok=True)
+        return str(path)
+
     def danmaku_path(self, video_path: str) -> str:
-        """Derive danmaku XML path from video path."""
-        return os.path.splitext(video_path)[0] + ".xml"
+        """Derive danmaku XML path (tiered into the ``meta/`` subdirectory)."""
+        return self._meta_sidecar_path(video_path, ".xml")
 
     def raw_danmaku_path(self, video_path: str) -> str:
-        """Derive raw danmaku JSONL path from video path."""
-        return os.path.splitext(video_path)[0] + ".jsonl"
+        """Derive raw danmaku JSONL path (tiered into ``meta/``)."""
+        return self._meta_sidecar_path(video_path, ".jsonl")
 
     def cover_path(self, video_path: str, ext: str = ".jpg") -> str:
-        """Derive cover image path from video path."""
-        return os.path.splitext(video_path)[0] + ext
+        """Derive cover image path (tiered into ``meta/``)."""
+        return self._meta_sidecar_path(video_path, ext)
 
     def meta_path(self, video_path: str) -> str:
-        """Derive ffmpeg metadata file path from video path."""
+        """Derive ffmpeg metadata file path from video path.
+
+        Stays beside the video: it is an intermediate file the postprocessor
+        auto-deletes once the remux succeeds (#37).
+        """
         return os.path.splitext(video_path)[0] + ".meta"
 
     def meta_json_path(self, video_path: str) -> str:
-        """Derive extra metadata JSON path from video path."""
-        return os.path.splitext(video_path)[0] + ".meta.json"
+        """Derive extra metadata JSON path (tiered into ``meta/``)."""
+        return self._meta_sidecar_path(video_path, ".meta.json")
