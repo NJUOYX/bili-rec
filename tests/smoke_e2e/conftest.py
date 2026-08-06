@@ -65,8 +65,6 @@ def _compose_env(env: SmokeEnv, extra: dict[str, str] | None = None) -> dict[str
 def smoke_env(tmp_path_factory: pytest.TempPathFactory) -> SmokeEnv:
     if shutil.which("docker") is None:
         pytest.skip("docker is not available on this host")
-    if shutil.which("ffprobe") is None:
-        pytest.skip("ffprobe is not available on this host (artifact validation)")
 
     root = tmp_path_factory.mktemp("smoke")
     rec_dir = root / "rec"

@@ -3,7 +3,8 @@
 D-class bugs only show up on the published artifact, so the checks here run
 against whatever the container wrote to the mounted volume: a playable mp4,
 a well-formed danmaku XML carrying the injected probe, an ASS file, and the
-UI served from inside the image.
+UI served from inside the image. ffprobe comes from the image under test
+itself, so the host needs nothing but docker.
 """
 
 from __future__ import annotations
@@ -21,15 +22,27 @@ def find_files(rec_dir: Path, suffix: str) -> list[Path]:
     return sorted(rec_dir.rglob(f"*{suffix}"))
 
 
-def validate_mp4_playable(rec_dir: Path) -> list[Path]:
-    """Every mp4 must parse and carry a video stream (ffprobe)."""
+def validate_mp4_playable(rec_dir: Path, image: str) -> list[Path]:
+    """Every mp4 must parse and carry a video stream.
+
+    Runs the image's own ffprobe against the mounted volume: the host may
+    not have ffmpeg, but an image that claims to remux must.
+    """
     mp4s = find_files(rec_dir, ".mp4")
     if not mp4s:
         raise ArtifactError(f"no mp4 found under {rec_dir}")
     for mp4 in mp4s:
+        inner = "/rec/" + str(mp4.relative_to(rec_dir))
         result = subprocess.run(
             [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
                 "ffprobe",
+                "-v",
+                f"{rec_dir}:/rec",
+                image,
                 "-v",
                 "error",
                 "-select_streams",
@@ -38,11 +51,11 @@ def validate_mp4_playable(rec_dir: Path) -> list[Path]:
                 "stream=codec_type",
                 "-of",
                 "csv=p=0",
-                str(mp4),
+                inner,
             ],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,
         )
         if result.returncode != 0:
             raise ArtifactError(f"ffprobe failed on {mp4}: {result.stderr.strip()}")

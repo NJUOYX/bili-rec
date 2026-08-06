@@ -171,7 +171,8 @@ def test_publish_artifact_smoke(smoke_env: SmokeEnv) -> None:
         assert not monitor.violations, monitor.report()
 
         # 9. The artifacts must be real: playable, well-formed, complete.
-        validate.validate_mp4_playable(env.rec_dir)
+        image = os.environ.get("BIREC_IMAGE", "birec:ci")
+        validate.validate_mp4_playable(env.rec_dir, image)
         validate.validate_danmaku_xml(env.rec_dir, PROBE)
         validate.validate_ass(env.rec_dir)
         leftovers = validate.validate_no_leftover_flv(env.rec_dir)
