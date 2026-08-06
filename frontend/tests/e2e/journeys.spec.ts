@@ -51,7 +51,11 @@ test.describe('任务模块旅程', () => {
     )
     const withoutCover = makeTaskDataRaw(
       { room_id: 2, cover_url: '', user_name: '主播B', room_title: '房间B' },
-      { running_status: 'stopped', monitor_enabled: false, recorder_enabled: false },
+      {
+        running_status: 'stopped',
+        monitor_enabled: false,
+        recorder_enabled: false,
+      },
     )
     await installApi(page, { tasks: [withCover, withoutCover] })
     await page.goto('/tasks')
