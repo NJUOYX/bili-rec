@@ -1,0 +1,41 @@
+# End-to-end smoke: the published artifact against a fake Bilibili (#19 §4).
+# Run via tests/smoke_e2e/conftest.py, which supplies --project-directory
+# pointing at a temp dir holding rec/ and state/.
+services:
+  fake-bili:
+    image: ${FAKE_BILI_IMAGE:-fake-bili:ci}
+    environment:
+      FAKE_BILI_ADVERTISE: http://fake-bili:18080
+      FAKE_BILI_PORT: "18080"
+      FAKE_BILI_ROOM_ID: "12345"
+    ports:
+      - "18080:18080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18080/_control/state', timeout=3)"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  birec:
+    image: ${BIREC_IMAGE:-birec:ci}
+    depends_on:
+      fake-bili:
+        condition: service_healthy
+    volumes:
+      - ${SMOKE_REC_DIR}:/rec
+      - ${SMOKE_STATE_DIR}:/root/.birec
+    ports:
+      - "2233:2233"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:2233/api/v1/app/status', timeout=3).status == 200 else 1)"
+      interval: 2s
+      timeout: 3s
+      retries: 60
