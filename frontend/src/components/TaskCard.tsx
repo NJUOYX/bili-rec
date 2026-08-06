@@ -10,6 +10,8 @@
  *
  * 手动切割（cut）已在后端功能范围决策中移除，不设切割按钮。
  */
+import { useState } from 'react'
+
 import {
   DeleteOutlined,
   EllipsisOutlined,
@@ -76,6 +78,9 @@ export function TaskCard({
     })
   }
 
+  const [coverFailed, setCoverFailed] = useState(false)
+  const showCover = !!task.cover_url && !coverFailed
+
   return (
     <Card
       hoverable
@@ -97,7 +102,22 @@ export function TaskCard({
             overflow: 'hidden',
           }}
         >
-          <span>{task.parent_area || task.area || '未知分区'}</span>
+          {showCover ? (
+            <img
+              src={task.cover_url}
+              alt={task.room_title || task.user_name}
+              onError={() => setCoverFailed(true)}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                position: 'absolute',
+                inset: 0,
+              }}
+            />
+          ) : (
+            <span>{task.parent_area || task.area || '未知分区'}</span>
+          )}
           <Tag
             color={task.live_status ? 'red' : 'default'}
             style={{ position: 'absolute', top: 8, left: 8, margin: 0 }}

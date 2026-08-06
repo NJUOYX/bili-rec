@@ -60,6 +60,7 @@ export interface TaskDataView {
   room_title: string
   area: string
   parent_area: string
+  cover_url: string
   live_status: boolean
   task_status: TaskStatusView
 }
@@ -128,6 +129,7 @@ export function parseTaskData(raw: unknown): TaskDataView | null {
     room_title: str(raw.room_title),
     area: str(raw.area),
     parent_area: str(raw.parent_area),
+    cover_url: str(raw.cover_url),
     live_status: bool(raw.live_status),
     task_status: parseTaskStatus(raw.task_status),
   }
