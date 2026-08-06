@@ -3,7 +3,7 @@
   "info": {
     "title": "bili-rec",
     "description": "Bilibili live-stream recorder API",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "paths": {
     "/api/v1/settings": {
