@@ -21,6 +21,17 @@ logger = logging.getLogger(__name__)
 _AUTO_DELETE_EXTENSIONS = {".flv", ".m4s", ".m3u8", ".meta", ".meta.json"}
 
 
+def _is_auto_deletable(path: Path) -> bool:
+    """Whether *path* carries an AUTO-delete intermediate extension.
+
+    ``Path.suffix`` only reports the last dot segment (``.json`` for a
+    ``.meta.json`` file), so compound extensions must be matched against
+    the lower-cased file name instead.
+    """
+    name = path.name.lower()
+    return any(name.endswith(ext) for ext in _AUTO_DELETE_EXTENSIONS)
+
+
 class Postprocessor:
     """Queue-driven post-processing worker.
 
@@ -235,10 +246,15 @@ class Postprocessor:
         logger.debug("Postprocessing completed: %s", item.source_path)
 
     async def _convert_danmaku(self, item: PostprocessingItem) -> None:
-        """Convert every danmaku XML among the item's related files to ASS."""
+        """Convert every danmaku XML among the item's related files to ASS.
+
+        The ASS is derived from the video path, not from the XML: since #37
+        the XML lives in a ``meta/`` subdirectory, while players only
+        auto-load a subtitle that sits beside the video itself.
+        """
+        ass_path = item.source_path.parent / (item.source_path.stem + ".ass")
         for related in item.related_files:
             if related.suffix.lower() == ".xml":
-                ass_path = related.with_suffix(".ass")
                 await convert_danmaku_to_ass(
                     related, ass_path, config=self._danmaku_config
                 )
@@ -246,7 +262,7 @@ class Postprocessor:
     def _delete_source(self, item: PostprocessingItem) -> None:
         """Delete source files (AUTO strategy: only on success)."""
         source = item.source_path
-        if source.suffix.lower() in _AUTO_DELETE_EXTENSIONS and source.exists():
+        if _is_auto_deletable(source) and source.exists():
             try:
                 source.unlink()
                 logger.debug("Deleted source: %s", source)
@@ -255,7 +271,7 @@ class Postprocessor:
 
         # Delete related intermediate files
         for related in item.related_files:
-            if related.suffix.lower() in _AUTO_DELETE_EXTENSIONS and related.exists():
+            if _is_auto_deletable(related) and related.exists():
                 try:
                     related.unlink()
                     logger.debug("Deleted related: %s", related)

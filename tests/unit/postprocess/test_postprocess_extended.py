@@ -826,6 +826,83 @@ class TestPostprocessorDanmakuConversion:
         assert raw.exists()
 
     @pytest.mark.asyncio
+    async def test_ass_lands_beside_video_when_xml_is_tiered_in_meta(
+        self, tmp_path: Path
+    ) -> None:
+        """#37: the XML moved into a meta/ subdirectory, but players only
+        auto-load subtitles from the video's own directory, so the ASS must
+        be written beside the video rather than next to the XML."""
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        meta_dir = tmp_path / "meta"
+        meta_dir.mkdir()
+        xml = meta_dir / "rec.xml"
+        xml.write_text(_DANMAKU_XML, encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=False,
+            inject_metadata_enabled=False,
+            danmaku_to_ass_enabled=True,
+        )
+        await self._run(pp, source, tmp_path / "rec.mp4", [xml])
+
+        assert (tmp_path / "rec.ass").exists()
+        assert not (meta_dir / "rec.ass").exists()
+
+    @pytest.mark.asyncio
+    async def test_ffmpeg_meta_file_is_auto_deleted_after_remux(
+        self, tmp_path: Path
+    ) -> None:
+        """#37: the .meta intermediate file sits beside the video and is handed
+        over as a related file so the existing AUTO delete cleans it up."""
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        meta_file = tmp_path / "rec.meta"
+        meta_file.write_text("title=x", encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=True,
+            inject_metadata_enabled=False,
+        )
+
+        async def _remux(_src: Path, dst: Path) -> bool:
+            dst.write_bytes(b"fake mp4")
+            return True
+
+        with patch("birec.postprocess.postprocessor.remux_flv_to_mp4", new=_remux):
+            await self._run(pp, source, tmp_path / "rec.mp4", [meta_file])
+
+        assert (tmp_path / "rec.mp4").exists()
+        assert not source.exists()
+        assert not meta_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_tiered_meta_json_is_auto_deleted_after_remux(
+        self, tmp_path: Path
+    ) -> None:
+        """A .meta.json tiered into meta/ is an intermediate file too."""
+        source = tmp_path / "rec.flv"
+        source.write_bytes(b"fake flv")
+        meta_dir = tmp_path / "meta"
+        meta_dir.mkdir()
+        meta_json = meta_dir / "rec.meta.json"
+        meta_json.write_text("{}", encoding="utf-8")
+
+        pp = Postprocessor(
+            remux_enabled=True,
+            inject_metadata_enabled=False,
+        )
+
+        async def _remux(_src: Path, dst: Path) -> bool:
+            dst.write_bytes(b"fake mp4")
+            return True
+
+        with patch("birec.postprocess.postprocessor.remux_flv_to_mp4", new=_remux):
+            await self._run(pp, source, tmp_path / "rec.mp4", [meta_json])
+
+        assert not meta_json.exists()
+
+    @pytest.mark.asyncio
     async def test_disabled_conversion_writes_nothing(self, tmp_path: Path) -> None:
         source = tmp_path / "rec.flv"
         source.write_bytes(b"fake flv")

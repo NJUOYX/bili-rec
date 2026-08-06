@@ -297,9 +297,16 @@ class RecordTask:
         if not segment.video_path:
             return
         video = Path(segment.video_path)
+        # The ffmpeg .meta file is written beside every video at recording
+        # start; listing it as a related file is what lets the postprocessor's
+        # AUTO delete clean it up once the remux succeeds (#37).
         related = [
             Path(path)
-            for path in (segment.danmaku_path, segment.raw_danmaku_path)
+            for path in (
+                segment.danmaku_path,
+                segment.raw_danmaku_path,
+                str(video.parent / (video.stem + ".meta")),
+            )
             if path
         ]
         self._postprocessor.submit(
