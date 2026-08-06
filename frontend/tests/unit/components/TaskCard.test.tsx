@@ -38,14 +38,14 @@ function renderCard(
     onDelete: vi.fn(),
     ...actions,
   }
-  render(
+  const result = render(
     <AppProviders queryClient={createPageQueryClient()}>
       <MemoryRouter>
         <TaskCard task={task} busy={busy} {...handlers} />
       </MemoryRouter>
     </AppProviders>,
   )
-  return handlers
+  return { ...handlers, container: result.container }
 }
 
 describe('TaskCard', () => {
@@ -85,5 +85,31 @@ describe('TaskCard', () => {
   it('录制态渲染速率仪表', () => {
     renderCard(view({}, { running_status: 'recording' }))
     expect(screen.getByTestId('rate-gauge')).toBeTruthy()
+  })
+
+  it('有 cover_url 时渲染封面图片', () => {
+    const { container } = renderCard(
+      view({ cover_url: 'https://cdn.example.com/cover.jpg' }),
+    )
+    const img = container.querySelector('img')
+    expect(img).toBeTruthy()
+    expect(img!.getAttribute('src')).toBe('https://cdn.example.com/cover.jpg')
+  })
+
+  it('无 cover_url 时降级为分区名占位', () => {
+    const { container } = renderCard(view({ cover_url: '' }))
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('娱乐')).toBeTruthy()
+  })
+
+  it('封面图片加载失败时降级为分区名占位', () => {
+    const { container } = renderCard(
+      view({ cover_url: 'https://cdn.example.com/broken.jpg' }),
+    )
+    const img = container.querySelector('img')
+    expect(img).toBeTruthy()
+    fireEvent.error(img!)
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('娱乐')).toBeTruthy()
   })
 })

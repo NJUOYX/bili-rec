@@ -8,6 +8,7 @@
 import { expect, test } from '@playwright/test'
 
 import { installApi, installOpenWs, installStalledWs } from './helpers'
+import { makeTaskDataRaw } from '../unit/helpers/fixtures'
 
 test.describe('任务模块旅程', () => {
   test('添加任务 → 列表出现录制中 → 详情停止', async ({ page }) => {
@@ -41,6 +42,30 @@ test.describe('任务模块旅程', () => {
     // 锚定排除列表批量的「全部停止」。停止后仍停留在详情页（无异常）。
     await page.getByRole('button', { name: /^(?:stop\s*)?停\s*止$/ }).click()
     await expect(page).toHaveURL(/\/tasks\/23058$/)
+  })
+
+  test('有封面时卡片展示封面图，无封面时展示分区名', async ({ page }) => {
+    const withCover = makeTaskDataRaw(
+      { room_id: 1, cover_url: 'https://i0.hdslb.com/cover1.jpg' },
+      { running_status: 'recording' },
+    )
+    const withoutCover = makeTaskDataRaw(
+      { room_id: 2, cover_url: '', user_name: '主播B', room_title: '房间B' },
+      { running_status: 'stopped', monitor_enabled: false, recorder_enabled: false },
+    )
+    await installApi(page, { tasks: [withCover, withoutCover] })
+    await page.goto('/tasks')
+
+    await expect(page.getByTestId('task-card')).toHaveCount(2)
+
+    // 有 cover_url 的卡片渲染 <img>
+    const coverCard = page.getByTestId('task-card').first()
+    await expect(coverCard.locator('img')).toBeVisible()
+
+    // 无 cover_url 的卡片渲染分区名占位
+    const noCoverCard = page.getByTestId('task-card').nth(1)
+    await expect(noCoverCard.locator('img')).toHaveCount(0)
+    await expect(noCoverCard.getByText('娱乐')).toBeVisible()
   })
 })
 

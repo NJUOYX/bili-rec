@@ -14,6 +14,7 @@ export function makeTaskDataRaw(
     room_title: '哔哩哔哩音悦台',
     area: '音乐',
     parent_area: '娱乐',
+    cover_url: '',
     live_status: true,
     task_status: {
       monitor_enabled: true,
