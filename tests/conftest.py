@@ -11,6 +11,7 @@ _MARKER_BY_DIR = {
     "component": "component",
     "system": "system",
     "realbili": "realbili",
+    "smoke_e2e": "smoke",
 }
 
 

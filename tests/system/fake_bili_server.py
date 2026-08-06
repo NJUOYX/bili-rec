@@ -20,8 +20,10 @@ import json
 import struct
 import time
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import brotli
 from aiohttp import WSMsgType, web
@@ -197,12 +199,28 @@ class FakeBiliServer:
     """Controllable fake Bilibili live server."""
 
     def __init__(
-        self, room_id: int = 12345, *, extra_room_ids: tuple[int, ...] = ()
+        self,
+        room_id: int = 12345,
+        *,
+        extra_room_ids: tuple[int, ...] = (),
+        advertise: str | None = None,
+        fixture: bytes | None = None,
+        control_api: bool = False,
+        bind_host: str = "127.0.0.1",
+        bind_port: int = 0,
     ) -> None:
         self.room_id = room_id
         # Rooms this server knows about. Several tasks recording at once need
         # each room to come back with its own id, or they all write to one path.
         self.room_ids = [room_id, *extra_room_ids]
+        # Cross-container mode: the address clients in other containers must
+        # use to reach this server. When set, it replaces the loopback address
+        # in every URL/host list the APIs advertise. Off for in-process tests.
+        self.advertise = advertise
+        # A real FLV payload (e.g. ffmpeg-generated) to serve instead of the
+        # synthetic frames, so a remux to mp4 yields a playable file. Faults
+        # still apply on top of it.
+        self.fixture = fixture
         self.live_status = 0  # 0=offline, 1=live, 2=replay
         self.stream_format = "flv"
         # What the room calls itself. Writable because the recorder turns it
@@ -211,12 +229,19 @@ class FakeBiliServer:
         self.streamer_name = "TestStreamer"
         self.fault = FaultConfig()
         self._app = web.Application()
+        self._bind_host = bind_host
+        self._bind_port = bind_port
+        self._control_api = control_api
         self._setup_routes()
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
-        self.port: int = 0
+        self.port: int = bind_port
         self.flv_data = generate_flv_stream(20)
         self.danmaku_ws_connections: list[web.WebSocketResponse] = []
+        # Stream responses currently being written, so an external controller
+        # can cut the wire the way a CDN outage does. (A list, not a set:
+        # aiohttp Request objects are unhashable.)
+        self._active_streams: list[web.Request] = []
         # A real CDN hands the stream over in many small writes. Serving the
         # whole blob in one go hides every failure mode that only shows up at a
         # chunk boundary, so the size is deliberately small and configurable.
@@ -269,9 +294,24 @@ class FakeBiliServer:
         self._app.router.add_get("/seg/{name}", self._handle_segment)
         # The path the real broadcast servers use.
         self._app.router.add_get("/sub", self._handle_ws_danmaku)
+        if self._control_api:
+            self._setup_control_routes()
+
+    def _setup_control_routes(self) -> None:
+        """External control endpoints for the container smoke test."""
+        self._app.router.add_get("/_control/state", self._ctrl_state)
+        self._app.router.add_post("/_control/live", self._ctrl_live)
+        self._app.router.add_post("/_control/offline", self._ctrl_offline)
+        self._app.router.add_post("/_control/fault", self._ctrl_fault)
+        self._app.router.add_post("/_control/clear-faults", self._ctrl_clear_faults)
+        self._app.router.add_post("/_control/stream/cut", self._ctrl_stream_cut)
+        self._app.router.add_post("/_control/danmaku", self._ctrl_danmaku)
+        self._app.router.add_post("/_control/command", self._ctrl_command)
 
     @property
     def base_url(self) -> str:
+        if self.advertise:
+            return self.advertise.rstrip("/")
         return f"http://127.0.0.1:{self.port}"
 
     @property
@@ -282,7 +322,7 @@ class FakeBiliServer:
     async def start(self) -> None:
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
-        self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        self._site = web.TCPSite(self._runner, self._bind_host, self._bind_port)
         await self._site.start()
         # Get the actual port
         assert self._site._server is not None
@@ -472,16 +512,23 @@ class FakeBiliServer:
         The client picks the TLS port; this server is plaintext, so it
         advertises its own port and the client's scheme follows it.
         """
+        if self.advertise:
+            parsed = urlparse(self.advertise)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or self.port
+        else:
+            host = "127.0.0.1"
+            port = self.port
         live = {
-            "host": "127.0.0.1",
-            "port": self.port,
-            "wss_port": self.port,
-            "ws_port": self.port,
+            "host": host,
+            "port": port,
+            "wss_port": port,
+            "ws_port": port,
         }
         if not self.fault.danmaku_dead_host_first:
             return [live]
         dead = {
-            "host": "127.0.0.1",
+            "host": host,
             "port": _DEAD_PORT,
             "wss_port": _DEAD_PORT,
             "ws_port": _DEAD_PORT,
@@ -506,14 +553,19 @@ class FakeBiliServer:
 
     def _build_stream_payload(self) -> bytes:
         """The bytes this request will serve, faults included."""
-        payload = self.flv_data + generate_flv_tag_pairs(
-            self.stream_extra_frames, start_frame=20
-        )
+        if self.fixture is not None:
+            # A real FLV file: appending synthetic frames would corrupt it,
+            # and it is long enough to outlive the test anyway.
+            payload = self.fixture
+        else:
+            payload = self.flv_data + generate_flv_tag_pairs(
+                self.stream_extra_frames, start_frame=20
+            )
         fault = self.fault
         if fault.stream_bad_tag_type:
-            # After the header and a few good tags, so the recording has really
-            # started before the bad byte arrives.
-            cut = len(self.flv_data)
+            # Somewhere after the stream has really started, so the recording
+            # is underway before the bad byte arrives.
+            cut = len(payload) // 2
             payload = payload[:cut] + _make_bad_tag_type_tag() + payload[cut:]
         if fault.stream_garbage_at_byte is not None:
             cut = min(fault.stream_garbage_at_byte, len(payload))
@@ -555,6 +607,7 @@ class FakeBiliServer:
 
         payload = self._build_stream_payload()
         written = 0
+        self._active_streams.append(request)
         try:
             for start in range(0, len(payload), self.stream_chunk_size):
                 await resp.write(payload[start : start + self.stream_chunk_size])
@@ -573,7 +626,86 @@ class FakeBiliServer:
         except (ConnectionResetError, asyncio.CancelledError):
             # The recorder hung up, which is exactly what stopping looks like.
             pass
+        finally:
+            for i, active in enumerate(self._active_streams):
+                if active is request:
+                    del self._active_streams[i]
+                    break
         return resp
+
+    def cut_active_streams(self) -> int:
+        """Abort every stream currently being written, like a CDN outage.
+
+        Returns the number of connections cut, so a controller can check that
+        something was actually in flight.
+        """
+        cut = 0
+        for request in list(self._active_streams):
+            transport = request.transport
+            if transport is not None and not transport.is_closing():
+                with contextlib.suppress(Exception):
+                    transport.abort()
+                cut += 1
+        return cut
+
+    # ── /_control handlers (container mode only) ─────────────────────────
+
+    async def _ctrl_state(self, request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "live_status": self.live_status,
+                "stream_requests": self.stream_requests,
+                "active_streams": len(self._active_streams),
+                "ws_connections_total": self.ws_connections_total,
+                "ws_connections_open": len(self.danmaku_ws_connections),
+                "heartbeats_received": self.heartbeats_received,
+                "room_info_requests": self.room_info_requests,
+                "play_info_requests": self.play_info_requests,
+            }
+        )
+
+    async def _ctrl_live(self, request: web.Request) -> web.Response:
+        self.set_live()
+        return web.json_response({"live_status": self.live_status})
+
+    async def _ctrl_offline(self, request: web.Request) -> web.Response:
+        self.set_offline()
+        return web.json_response({"live_status": self.live_status})
+
+    async def _ctrl_fault(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        known = {f.name for f in fields(FaultConfig)}
+        unknown = set(body) - known
+        if unknown:
+            return web.json_response(
+                {"error": f"unknown fault keys: {sorted(unknown)}"}, status=400
+            )
+        self.set_fault(**body)
+        return web.json_response({"ok": True})
+
+    async def _ctrl_clear_faults(self, request: web.Request) -> web.Response:
+        self.fault = FaultConfig()
+        return web.json_response({"ok": True})
+
+    async def _ctrl_stream_cut(self, request: web.Request) -> web.Response:
+        return web.json_response({"cut": self.cut_active_streams()})
+
+    async def _ctrl_danmaku(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        text = str(body.get("text", ""))
+        count = int(body.get("count", 1))
+        uname = str(body.get("uname", "Viewer"))
+        for _ in range(count):
+            await self.send_danmaku(text, uname=uname)
+        return web.json_response({"sent": count})
+
+    async def _ctrl_command(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        cmd = str(body.get("cmd", ""))
+        data = body.get("data")
+        data = data if isinstance(data, dict) else {}
+        await self.send_danmaku_command(cmd, data)
+        return web.json_response({"cmd": cmd})
 
     @staticmethod
     def _abort(request: web.Request) -> None:
@@ -720,3 +852,40 @@ class FakeBiliServer:
         """Broadcast bytes that are not a packet, to be survived and ignored."""
         for ws in self.danmaku_ws_connections:
             await ws.send_bytes(b"\x00\x00\x00\x02\x00\x10")
+
+
+def _main() -> None:
+    """Container entry point: serve the fake on a fixed port with control API.
+
+    Environment: FAKE_BILI_BIND_HOST (default 0.0.0.0), FAKE_BILI_PORT
+    (default 18080), FAKE_BILI_ADVERTISE (address clients should use),
+    FAKE_BILI_FIXTURE (path to a real FLV payload), FAKE_BILI_ROOM_ID.
+    """
+    import os
+
+    fixture_path = os.environ.get("FAKE_BILI_FIXTURE", "")
+    fixture = Path(fixture_path).read_bytes() if fixture_path else None
+    server = FakeBiliServer(
+        int(os.environ.get("FAKE_BILI_ROOM_ID", "12345")),
+        advertise=os.environ.get("FAKE_BILI_ADVERTISE") or None,
+        fixture=fixture,
+        control_api=True,
+        bind_host=os.environ.get("FAKE_BILI_BIND_HOST", "0.0.0.0"),
+        bind_port=int(os.environ.get("FAKE_BILI_PORT", "18080")),
+    )
+    # The fixture is real encoded video and much bigger than the synthetic
+    # blob; pace it fast enough that the recording keeps up with wall clock.
+    server.stream_chunk_size = 16 * 1024
+    server.stream_chunk_delay = 0.005
+
+    async def run() -> None:
+        await server.start()
+        print(f"fake-bili ready on {server.base_url}", flush=True)
+        await asyncio.Event().wait()
+
+    with contextlib.suppress(KeyboardInterrupt):
+        asyncio.run(run())
+
+
+if __name__ == "__main__":
+    _main()

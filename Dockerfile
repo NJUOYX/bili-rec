@@ -42,11 +42,15 @@ RUN pip install --no-cache-dir /tmp/*.whl && rm -f /tmp/*.whl
 # 前端产物：单镜像同时提供 API 与 UI（BIREC_STATIC_DIR 指向静态目录）。
 COPY --from=frontend /app/frontend/dist /app/static
 
-ENV BIREC_OUT_DIR=/rec \
-    BIREC_LOG_DIR=/var/log/birec \
-    BIREC_STATIC_DIR=/app/static
+# BIREC_OUT_DIR/BIREC_LOG_DIR 走不通（Application 用 model_construct 绕过环境变量），
+# 故路径必须经 CMD 显式传入，落到卷挂载点，否则录像写进容器临时目录、重启即丢。
+WORKDIR /app
+ENV BIREC_STATIC_DIR=/app/static
 VOLUME ["/rec", "/root/.birec", "/var/log/birec"]
 
 EXPOSE 2233
 ENTRYPOINT ["birec"]
-CMD ["--host", "0.0.0.0", "--port", "2233"]
+CMD ["--host", "0.0.0.0", "--port", "2233", \
+     "--config", "/root/.birec/settings.toml", \
+     "--output", "/rec", \
+     "--log-dir", "/var/log/birec"]

@@ -1,0 +1,31 @@
+# Smoke test preset, mounted at /root/.birec/settings.toml in the container.
+# All Bilibili API bases point at the fake-bili container; remux and ASS
+# conversion are enabled so the artifact validation has real files to check.
+version = "1.0"
+tasks = []
+
+[output]
+pathTemplate = "{roomid} - {uname}/blive_{roomid}_{year}-{month}-{day}-{hour}{minute}{second}"
+outDir = "/rec"
+
+[biliApi]
+baseApiUrls = [
+    "http://fake-bili:18080",
+]
+baseLiveApiUrls = [
+    "http://fake-bili:18080",
+]
+basePlayInfoApiUrls = [
+    "http://fake-bili:18080",
+]
+
+[recorder]
+streamFormat = "flv"
+readTimeout = 3
+disconnectionTimeout = 600
+saveCover = false
+
+[postprocessing]
+remuxToMp4 = true
+injectExtraMetadata = false
+danmakuToAss = true

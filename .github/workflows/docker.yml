@@ -2,14 +2,19 @@ name: Docker CI
 
 # Dockerfile 把前端 dist 与后端 wheel 合成单镜像（frontend-design.md §12）。
 # release.yml 只在打 tag 时构建，那时集成断裂已经太晚，故在 PR 上单独校验（不推送）。
+# 除了"镜像能建起来"，还要验证"录得对"：冒烟把镜像和 fake-bili 一起跑起来，
+# 录制、注故障、重启容器、校验产物（#19 方案 4）。
 on:
   push:
+    branches: [main]
     paths:
       - "Dockerfile"
       - "frontend/**"
       - "src/**"
       - "pyproject.toml"
       - "uv.lock"
+      - "tests/smoke_e2e/**"
+      - "tests/system/fake_bili_server.py"
       - ".github/workflows/docker.yml"
   pull_request:
     paths:
@@ -18,7 +23,16 @@ on:
       - "src/**"
       - "pyproject.toml"
       - "uv.lock"
+      - "tests/smoke_e2e/**"
+      - "tests/system/fake_bili_server.py"
       - ".github/workflows/docker.yml"
+  workflow_dispatch:
+    inputs:
+      stable_seconds:
+        description: "稳态录制时长（秒），跑完整版冒烟用 300+"
+        type: choice
+        default: "60"
+        options: ["60", "300", "600"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -27,6 +41,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -49,3 +64,32 @@ jobs:
 
       - name: Verify entrypoint is installed
         run: docker run --rm --entrypoint birec birec:ci --help
+
+      # ── 发布产物冒烟（#19 方案 4）──────────────────────────────────
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install test dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Build fake-bili image (FROM the image under test)
+        run: |
+          docker build -f tests/smoke_e2e/Dockerfile.fake-bili \
+            -t fake-bili:ci --build-arg BASE_IMAGE=birec:ci .
+
+      - name: Run publish-artifact smoke
+        env:
+          SMOKE_STABLE_SECONDS: >-
+            ${{ github.event_name == 'workflow_dispatch' &&
+                inputs.stable_seconds || '60' }}
+        run: uv run pytest tests/smoke_e2e -m smoke -v --basetemp .smoke-tmp
+
+      - name: Upload smoke evidence (logs + recordings) on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-evidence
+          path: .smoke-tmp
+          if-no-files-found: ignore
