@@ -353,7 +353,7 @@ class TestRecorder:
             "birec.core.flv_stream_recorder_impl._STREAM_END_DELAY", 0.001
         )
 
-        async def _nothing_at_all(_url):
+        async def _nothing_at_all(_self, _url):
             """A fetch that succeeds and yields not a single chunk."""
             return
             yield b""  # pragma: no cover - makes this an async generator
