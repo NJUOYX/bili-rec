@@ -5,15 +5,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from birec.bili.live import Live
 from birec.bili.live_monitor import LiveMonitor
 from birec.bili.models import LiveStatus, RoomInfo, UserInfo
 from birec.core.models import CompletedSegment, StartedSegment
 from birec.core.path_provider import PathProvider
 from birec.core.recorder import Recorder
+from birec.event import TaskRefreshedEvent
 from birec.postprocess.danmaku_to_ass import DanmakuToAssConfig
 from birec.postprocess.models import (
     PostprocessingItem,
@@ -38,6 +40,7 @@ def _make_live() -> MagicMock:
     live.room_info = None
     live.user_info = None
     live.init = AsyncMock()
+    live.refresh = AsyncMock()
     live.get_stream_url = AsyncMock(return_value="https://cdn.example.com/live.flv")
     live.get_live_status = AsyncMock(return_value=LiveStatus.LIVE)
     live.api.get_danmu_info = AsyncMock(
@@ -284,6 +287,103 @@ class TestRecordTaskLifecycle:
         comps["postprocessor"].stop.assert_awaited_once()
         # The listener must go too, or a torn-down task keeps being fed.
         comps["recorder"].set_segment_listener.assert_called_with(None)
+
+
+class TestRecordTaskRoomChanged:
+    """A renamed room must reach both the recorder and the frontend (#40).
+
+    The task is the frontend's wire: when ``Live.refresh()`` detects a change
+    it notifies its listeners, and the task turns that into a
+    ``TaskRefreshedEvent`` the WebSocket carries to the UI.
+    """
+
+    @staticmethod
+    def _payload(title: str, uname: str) -> dict:
+        return {
+            "room_info": {
+                "uid": 99,
+                "room_id": 12345,
+                "short_id": 0,
+                "area_id": 1,
+                "area_name": "Game",
+                "parent_area_id": 1,
+                "parent_area_name": "Ent",
+                "live_status": 1,
+                "live_start_time": 0,
+                "online": 1,
+                "title": title,
+                "cover": "",
+                "tags": "",
+                "description": "",
+            },
+            "anchor_info": {
+                "base_info": {
+                    "uname": uname,
+                    "gender": "",
+                    "face": "https://example.com/face.jpg",
+                }
+            },
+        }
+
+    def test_init_registers_as_room_changed_listener(self) -> None:
+        task, comps = _make_task()
+        comps["live"].add_listener.assert_called_once_with(task)
+
+    def test_on_room_changed_submits_task_refreshed_event(self) -> None:
+        event_center = MagicMock()
+        task, comps = _make_task(event_center=event_center)
+
+        task.on_room_changed(comps["live"])
+
+        event_center.submit.assert_called_once()
+        event = event_center.submit.call_args[0][0]
+        assert isinstance(event, TaskRefreshedEvent)
+        assert event.data.room_id == 12345
+
+    async def test_refresh_info_pulls_fresh_room_info(self) -> None:
+        task, comps = _make_task()
+        await task.refresh_info()
+        comps["live"].refresh.assert_awaited_once()
+
+    async def test_destroy_removes_room_changed_listener(self) -> None:
+        task, comps = _make_task()
+        await task.destroy()
+        comps["live"].remove_listener.assert_called_once_with(task)
+
+    async def test_rename_pushes_event_end_to_end(self) -> None:
+        """The full chain on a real Live: refresh -> change -> event bus (#40)."""
+        comps = _make_components()
+        live = Live(12345, session=MagicMock(), api_platform="web")
+        event_center = MagicMock()
+        task = RecordTask(
+            12345,
+            live,
+            comps["danmaku_client"],
+            comps["monitor"],
+            comps["recorder"],
+            comps["postprocessor"],
+            event_center=event_center,
+        )
+
+        with (
+            patch.object(live.api, "get_info_by_room", new_callable=AsyncMock) as m,
+            patch.object(live.api, "get_room_play_infos", new_callable=AsyncMock) as m2,
+        ):
+            m.return_value = self._payload("Old Title", "OldName")
+            m2.return_value = []
+            await live.init()
+            event_center.submit.reset_mock()
+
+            m.return_value = self._payload("New Title", "NewName")
+            await live.refresh()
+
+        events = [c.args[0] for c in event_center.submit.call_args_list]
+        refreshed = [e for e in events if isinstance(e, TaskRefreshedEvent)]
+        assert [e.data.room_id for e in refreshed] == [12345]
+        # And the snapshot the API serves must reflect the rename too.
+        data = task.get_data()
+        assert data.room_title == "New Title"
+        assert data.user_name == "NewName"
 
 
 class TestRecordTaskPostprocessingWiring:

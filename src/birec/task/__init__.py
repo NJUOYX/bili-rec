@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..bili.live import LiveRoomChangedListener
 from ..core.models import CompletedSegment, StartedSegment
 from ..event import (
     CoverImageDownloadedEvent,
@@ -26,6 +27,8 @@ from ..event import (
     RawDanmakuFileCompletedEventData,
     RawDanmakuFileCreatedEvent,
     RawDanmakuFileCreatedEventData,
+    TaskRefreshedEvent,
+    TaskRefreshedEventData,
     VideoFileCompletedEvent,
     VideoFileCompletedEventData,
     VideoFileCreatedEvent,
@@ -171,7 +174,7 @@ class TaskMetadata:
     cover_url: str = ""
 
 
-class RecordTask:
+class RecordTask(LiveRoomChangedListener):
     """Orchestrates monitoring, recording, and post-processing for one room.
 
     Composes the Bilibili adapter (``Live``/``DanmakuClient``/``LiveMonitor``),
@@ -209,6 +212,11 @@ class RecordTask:
         recorder.set_segment_started_listener(self._on_segment_started)
         recorder.set_cover_listener(self._on_cover_downloaded)
         postprocessor.set_completion_listener(self._on_postprocessing_completed)
+        # Room-info edits (streamer renamed the room, swapped the cover) must
+        # reach the frontend: the recorder subscribes to Live for its path
+        # rendering, and the task turns the same notification into an event
+        # the WebSocket pushes so clients refetch the task data (#40).
+        live.add_listener(self)
 
     @property
     def room_id(self) -> int:
@@ -391,6 +399,18 @@ class RecordTask:
                 )
             )
 
+    def on_room_changed(self, live: Live) -> None:
+        """Announce refreshed room/user info (#40).
+
+        Fired by ``Live.refresh()`` whenever a displayed field changed —
+        no matter what triggered the refresh. The event is the frontend's cue
+        to refetch the task data: without it a renamed room keeps showing the
+        old title and streamer name until something else happens to refresh.
+        """
+        self._event_center.submit(
+            TaskRefreshedEvent.from_data(TaskRefreshedEventData(room_id=self._room_id))
+        )
+
     # ── lifecycle ────────────────────────────────────────────────────────
 
     async def setup(self) -> None:
@@ -427,6 +447,7 @@ class RecordTask:
         """Tear down all components for this task."""
         self._monitor.disable()
         self._monitor.remove_listener(self._recorder)
+        self._live.remove_listener(self)
         await self._danmaku_client.stop()
         await self._recorder.stop()
         self._recorder.set_segment_listener(None)
@@ -612,8 +633,13 @@ class RecordTask:
         ]
 
     async def refresh_info(self) -> None:
-        """Refresh room/user info from the API."""
-        await self._live.init()
+        """Refresh room/user info from the API.
+
+        Changes detected by ``Live.refresh()`` propagate on their own (#40):
+        the recorder re-renders future paths, and this task pushes a
+        ``TaskRefreshedEvent`` so the frontend refetches the task data.
+        """
+        await self._live.refresh()
 
 
 class RecordTaskManager:

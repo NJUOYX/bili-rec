@@ -31,6 +31,8 @@ __all__ = (
     "VideoPostprocessingCompletedEvent",
     "PostprocessingCompletedEventData",
     "PostprocessingCompletedEvent",
+    "TaskRefreshedEventData",
+    "TaskRefreshedEvent",
     "ErrorData",
     "Error",
 )
@@ -155,6 +157,17 @@ class PostprocessingCompletedEventData(BaseEventData):
 
 class PostprocessingCompletedEvent(BaseEvent[PostprocessingCompletedEventData]):
     type: str = "PostprocessingCompletedEvent"
+
+
+# --- Task info events ---
+
+
+class TaskRefreshedEventData(BaseEventData):
+    room_id: int
+
+
+class TaskRefreshedEvent(BaseEvent[TaskRefreshedEventData]):
+    type: str = "TaskRefreshedEvent"
 
 
 # --- Error event ---
