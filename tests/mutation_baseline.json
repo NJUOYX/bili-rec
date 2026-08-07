@@ -1,11 +1,11 @@
 {
-  "not_killed": 287,
-  "total": 1226,
+  "not_killed": 282,
+  "total": 1247,
   "per_module": {
-    "birec.core.recorder": 81,
+    "birec.core.recorder": 80,
     "birec.task": 61,
     "birec.core.flv_stream_recorder_impl": 56,
-    "birec.bili.live_monitor": 46,
+    "birec.bili.live_monitor": 42,
     "birec.flv.operators.parse": 35,
     "birec.core.statistics": 8
   }

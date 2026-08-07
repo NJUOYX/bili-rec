@@ -118,12 +118,17 @@ class TestLiveMonitorCommands:
         monitor.add_listener(listener)
         monitor.enable()
 
-        with patch.object(live, "refresh", new_callable=AsyncMock) as m_refresh:
+        logger = MagicMock()
+        with (
+            patch.object(live, "refresh", new_callable=AsyncMock) as m_refresh,
+            patch.object(monitor, "_logger", logger),
+        ):
             await monitor.handle_command("ROOM_CHANGE")
 
         # The command carries no details: the new room info must be pulled
         # before listeners are handed the Live state (#40).
         m_refresh.assert_awaited_once()
+        logger.info.assert_called_once_with("Room changed")
         assert listener.events == ["room_changed"]
         assert listener.lives == [live]
         monitor.disable()
@@ -139,10 +144,18 @@ class TestLiveMonitorCommands:
         monitor.add_listener(listener)
         monitor.enable()
 
-        with patch.object(live, "refresh", new_callable=AsyncMock) as m_refresh:
+        logger = MagicMock()
+        with (
+            patch.object(live, "refresh", new_callable=AsyncMock) as m_refresh,
+            patch.object(monitor, "_logger", logger),
+        ):
             m_refresh.side_effect = Exception("API down")
             await monitor.handle_command("ROOM_CHANGE")
 
+        # The failure is recorded verbatim so operators can find it (#40).
+        logger.exception.assert_called_once_with(
+            "Room change: refreshing room info failed"
+        )
         assert listener.events == ["room_changed"]
         monitor.disable()
 
@@ -466,9 +479,11 @@ class TestPeriodicCheck:
         monitor.add_listener(listener)
         monitor._is_living = True
 
+        logger = MagicMock()
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
             patch.object(live, "refresh", new_callable=AsyncMock) as m_refresh,
+            patch.object(monitor, "_logger", logger),
         ):
             m.return_value = LiveStatus.PREPARING
             m_refresh.side_effect = Exception("API down")
@@ -476,6 +491,7 @@ class TestPeriodicCheck:
 
         assert monitor.is_living is False
         assert listener.events == ["live_ended"]
+        logger.debug.assert_called_with("Periodic room info refresh failed")
 
     async def test_periodic_loop_sleeps_interval_plus_jitter(self) -> None:
         """Each cycle waits the full interval ± jitter, then checks again."""
