@@ -51,6 +51,15 @@ describe('parseEventMessage', () => {
     })
   })
 
+  it('解析 TaskRefreshedEvent（仅 room_id，房间信息已刷新，#40）', () => {
+    const raw = makeEvent('TaskRefreshedEvent', { room_id: 42 })
+    const parsed = parseEventMessage(raw)
+    expect(parsed).toMatchObject({
+      type: 'TaskRefreshedEvent',
+      data: { room_id: 42 },
+    })
+  })
+
   it('解析 Error 事件（name + detail）', () => {
     const raw = makeEvent('Error', { name: 'RuntimeError', detail: 'boom' })
     const parsed = parseEventMessage(raw)
@@ -89,6 +98,14 @@ describe('parseEventMessage', () => {
       },
     ],
     [{ type: 'Error', id: 'x', date: 'y', data: { name: 'E' } }], // 缺 detail
+    [
+      {
+        type: 'TaskRefreshedEvent',
+        id: 'x',
+        date: 'y',
+        data: { room_id: 'nope' },
+      },
+    ], // room_id 非数字
   ])('拒绝畸形载荷并返回 null：%j', (raw) => {
     expect(parseEventMessage(raw)).toBeNull()
   })

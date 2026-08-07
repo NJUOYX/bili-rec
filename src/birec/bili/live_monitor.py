@@ -134,7 +134,19 @@ class LiveMonitor(SwitchableMixin, EventEmitter[LiveMonitorListener]):
             await self._emit("live_ended", self._live)
 
     async def _on_room_change_command(self) -> None:
-        """Handle ROOM_CHANGE command."""
+        """Handle ROOM_CHANGE command: pull the new info, then notify.
+
+        The danmaku command carries no room details, so without a refresh the
+        listeners would be handed the stale state — the rename would never
+        land. A refresh that fails is logged, not swallowed silently, and the
+        notification still goes out: the periodic check catches up later, but
+        dropping the event would leave listeners unaware anything happened
+        (#40).
+        """
+        try:
+            await self._live.refresh()
+        except Exception:
+            self._logger.exception("Room change: refreshing room info failed")
         self._logger.info("Room changed")
         await self._emit("room_changed", self._live)
 
@@ -212,6 +224,15 @@ class LiveMonitor(SwitchableMixin, EventEmitter[LiveMonitorListener]):
             self._cancel_stream_poll()
             self._logger.info("Periodic check: live ended (recovered)")
             await self._emit("live_ended", self._live)
+
+        # Reconcile the room info too: a rename whose ROOM_CHANGE got lost
+        # (danmaku dropped or disconnected) is picked up within one check
+        # interval. ``refresh()`` only notifies when something actually
+        # changed, so this stays silent on an unedited room (#40).
+        try:
+            await self._live.refresh()
+        except Exception:
+            self._logger.debug("Periodic room info refresh failed")
 
     # --- Reconnection State Repair ---
 

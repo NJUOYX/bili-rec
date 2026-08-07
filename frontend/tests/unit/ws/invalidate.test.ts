@@ -80,6 +80,17 @@ describe('applyEventToCache（§7.4 映射表）', () => {
     expect(invalidatedKeys()).toEqual([['task', 22, 'data']])
   })
 
+  it('TaskRefreshedEvent → 失效任务列表前缀 + 详情 data（刷新标题/主播名，#40）', () => {
+    const { queryClient, invalidatedKeys } = setup()
+    applyEventToCache(queryClient, {
+      type: 'TaskRefreshedEvent',
+      id: 'id-refresh',
+      date: '2026-07-28T12:00:00+08:00',
+      data: { room_id: 33 },
+    })
+    expect(invalidatedKeys()).toEqual([['tasks'], ['task', 33, 'data']])
+  })
+
   it('Error 事件无缓存动作（交由事件面板/toast，§9）', () => {
     const { queryClient, spy } = setup()
     applyEventToCache(queryClient, {

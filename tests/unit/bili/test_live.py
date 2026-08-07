@@ -15,7 +15,7 @@ from birec.bili.exceptions import (
     NoStreamCodecAvailable,
     NoStreamFormatAvailable,
 )
-from birec.bili.live import Live
+from birec.bili.live import Live, LiveRoomChangedListener
 from birec.bili.models import LiveStatus
 
 pytestmark = pytest.mark.unit
@@ -25,6 +25,66 @@ def _make_live(room_id: int = 12345) -> Live:
     session = MagicMock()
     live = Live(room_id, session=session, api_platform="web")
     return live
+
+
+def _room_data(
+    title: str = "Test Room",
+    uname: str = "TestUser",
+    *,
+    room_id: int = 12345,
+    online: int = 500,
+    live_status: int = 1,
+    cover: str = "https://example.com/cover.jpg",
+    area_name: str = "网游",
+    parent_area_name: str = "游戏",
+) -> dict:
+    """A getInfoByRoom payload with the display fields as parameters."""
+    return {
+        "room_info": {
+            "uid": 100,
+            "room_id": room_id,
+            "short_id": 123,
+            "area_id": 1,
+            "area_name": area_name,
+            "parent_area_id": 2,
+            "parent_area_name": parent_area_name,
+            "live_status": live_status,
+            "live_start_time": 1700000000,
+            "online": online,
+            "title": title,
+            "cover": cover,
+            "tags": "tag1",
+            "description": "desc",
+        },
+        "anchor_info": {
+            "base_info": {
+                "uname": uname,
+                "gender": "男",
+                "face": "https://example.com/face.jpg",
+            }
+        },
+    }
+
+
+class _RecordingRoomChangedListener(LiveRoomChangedListener):
+    """Collects every room_changed notification for assertions."""
+
+    def __init__(self) -> None:
+        self.calls: list[Live] = []
+
+    def on_room_changed(self, live: Live) -> None:
+        self.calls.append(live)
+
+
+async def _refresh_live(live: Live, data: dict) -> None:
+    """Run one refresh cycle against the given fake getInfoByRoom payload."""
+    with (
+        patch.object(live.api, "get_info_by_room", new_callable=AsyncMock) as m,
+        patch.object(live.api, "get_room_play_infos", new_callable=AsyncMock) as m2,
+    ):
+        m.return_value = data
+        m2.return_value = []
+        await live.refresh()
 
 
 def _play_info_response(
@@ -393,3 +453,104 @@ class TestHotSwap:
         assert live.base_live_api_urls == ["https://custom.live.com"]
         live.base_play_info_api_urls = ["https://custom.play.com"]
         assert live.base_play_info_api_urls == ["https://custom.play.com"]
+
+
+class TestRoomChanged:
+    """Live.refresh() must notify room-changed listeners on visible edits (#40).
+
+    A streamer renaming the room or changing the cover used to reach nobody:
+    ``refresh()`` stored the new info and stopped there. The notification is
+    what drives the recorder's path rendering and the frontend task data.
+    """
+
+    async def test_first_load_is_not_a_change(self) -> None:
+        live = _make_live()
+        listener = _RecordingRoomChangedListener()
+        live.add_listener(listener)
+        await _refresh_live(live, _room_data())
+        assert listener.calls == []
+
+    async def test_title_change_notifies_listeners(self) -> None:
+        live = _make_live()
+        listener = _RecordingRoomChangedListener()
+        live.add_listener(listener)
+        await _refresh_live(live, _room_data(title="Before"))
+        await _refresh_live(live, _room_data(title="After"))
+        assert listener.calls == [live]
+        assert live.room_info is not None
+        assert live.room_info.title == "After"
+
+    async def test_uname_change_notifies_listeners(self) -> None:
+        live = _make_live()
+        listener = _RecordingRoomChangedListener()
+        live.add_listener(listener)
+        await _refresh_live(live, _room_data(uname="OldName"))
+        await _refresh_live(live, _room_data(uname="NewName"))
+        assert listener.calls == [live]
+
+    async def test_cover_change_notifies_listeners(self) -> None:
+        live = _make_live()
+        listener = _RecordingRoomChangedListener()
+        live.add_listener(listener)
+        await _refresh_live(live, _room_data())
+        await _refresh_live(live, _room_data(cover="https://example.com/new.jpg"))
+        assert listener.calls == [live]
+
+    async def test_area_change_notifies_listeners(self) -> None:
+        live = _make_live()
+        listener = _RecordingRoomChangedListener()
+        live.add_listener(listener)
+        await _refresh_live(live, _room_data())
+        await _refresh_live(live, _room_data(area_name="单机", parent_area_name="分区"))
+        assert listener.calls == [live]
+
+    async def test_unchanged_refresh_does_not_notify(self) -> None:
+        live = _make_live()
+        listener = _RecordingRoomChangedListener()
+        live.add_listener(listener)
+        await _refresh_live(live, _room_data())
+        await _refresh_live(live, _room_data())
+        assert listener.calls == []
+
+    async def test_volatile_fields_do_not_notify(self) -> None:
+        """Viewer count and live status churn constantly and have their own
+        channels; they must not masquerade as a room edit (#40)."""
+        live = _make_live()
+        listener = _RecordingRoomChangedListener()
+        live.add_listener(listener)
+        await _refresh_live(live, _room_data(online=10, live_status=1))
+        await _refresh_live(live, _room_data(online=999, live_status=0))
+        assert listener.calls == []
+
+    async def test_remove_listener_stops_notifications(self) -> None:
+        live = _make_live()
+        listener = _RecordingRoomChangedListener()
+        live.add_listener(listener)
+        await _refresh_live(live, _room_data(title="Before"))
+        live.remove_listener(listener)
+        await _refresh_live(live, _room_data(title="After"))
+        assert listener.calls == []
+
+    async def test_add_listener_is_idempotent(self) -> None:
+        live = _make_live()
+        listener = _RecordingRoomChangedListener()
+        live.add_listener(listener)
+        live.add_listener(listener)
+        await _refresh_live(live, _room_data(title="Before"))
+        await _refresh_live(live, _room_data(title="After"))
+        assert listener.calls == [live]
+
+    async def test_a_failing_listener_does_not_break_the_others(self) -> None:
+        live = _make_live()
+
+        class _Broken(LiveRoomChangedListener):
+            def on_room_changed(self, live: Live) -> None:
+                raise RuntimeError("boom")
+
+        broken = _Broken()
+        healthy = _RecordingRoomChangedListener()
+        live.add_listener(broken)
+        live.add_listener(healthy)
+        await _refresh_live(live, _room_data(title="Before"))
+        await _refresh_live(live, _room_data(title="After"))
+        assert healthy.calls == [live]

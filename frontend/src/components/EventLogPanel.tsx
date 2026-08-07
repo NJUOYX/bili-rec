@@ -20,6 +20,7 @@ export const EVENT_TYPE_LABELS: Record<AppEvent['type'], string> = {
   CoverImageDownloadedEvent: '封面已下载',
   VideoPostprocessingCompletedEvent: '视频后处理完成',
   PostprocessingCompletedEvent: '后处理完成',
+  TaskRefreshedEvent: '房间信息已刷新',
   Error: '错误',
 }
 
@@ -30,6 +31,9 @@ export function describeEvent(event: AppEvent): string {
   }
   if (event.type === 'PostprocessingCompletedEvent') {
     return `房间 ${event.data.room_id} · ${event.data.files.length} 个产物`
+  }
+  if (event.type === 'TaskRefreshedEvent') {
+    return `房间 ${event.data.room_id} · 房间信息已刷新`
   }
   return `房间 ${event.data.room_id} · ${event.data.path}`
 }

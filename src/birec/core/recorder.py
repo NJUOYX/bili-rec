@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import aiohttp
 
-from ..bili.live import Live
+from ..bili.live import Live, LiveRoomChangedListener
 from ..bili.live_monitor import LiveMonitor, LiveMonitorListener
 from ..bili.models import RoomInfo, UserInfo
 from .cover_downloader import CoverDownloader
@@ -27,7 +27,7 @@ __all__ = ("Recorder",)
 logger = logging.getLogger(__name__)
 
 
-class Recorder(LiveMonitorListener):
+class Recorder(LiveMonitorListener, LiveRoomChangedListener):
     """Top-level recording coordinator.
 
     Responds to LiveMonitor events to start/stop recording.
@@ -87,6 +87,12 @@ class Recorder(LiveMonitorListener):
 
         # Register as monitor listener
         monitor.add_listener(self)
+        # Room-info edits reach the recorder through Live no matter what
+        # triggered the refresh — danmaku ROOM_CHANGE, the monitor's periodic
+        # check, or the user hitting "refresh info" — so subscribe at the
+        # source: without this the path provider keeps rendering the old
+        # title/uname into every later session (#40).
+        live.add_listener(self)
 
     @property
     def room_id(self) -> int:
@@ -367,3 +373,4 @@ class Recorder(LiveMonitorListener):
         """
         await self.stop_recording()
         self._monitor.remove_listener(self)
+        self._live.remove_listener(self)

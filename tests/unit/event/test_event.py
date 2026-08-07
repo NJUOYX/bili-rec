@@ -29,6 +29,8 @@ from birec.event import (
     RawDanmakuFileCompletedEventData,
     RawDanmakuFileCreatedEvent,
     RawDanmakuFileCreatedEventData,
+    TaskRefreshedEvent,
+    TaskRefreshedEventData,
     VideoFileCompletedEvent,
     VideoFileCompletedEventData,
     VideoFileCreatedEvent,
@@ -124,6 +126,16 @@ class TestEventDataModels:
         event = PostprocessingCompletedEvent.from_data(data)
         assert event.type == "PostprocessingCompletedEvent"
         assert event.data.files == ["/out/a.mp4", "/out/a.xml"]
+
+    def test_task_refreshed(self) -> None:
+        """Room-info edits get their own event so clients refetch task data (#40)."""
+        data = TaskRefreshedEventData(room_id=700)
+        event = TaskRefreshedEvent.from_data(data)
+        assert event.type == "TaskRefreshedEvent"
+        assert event.data.room_id == 700
+        dumped = event.model_dump(mode="json")
+        assert dumped["type"] == "TaskRefreshedEvent"
+        assert dumped["data"] == {"room_id": 700}
 
 
 class TestErrorEvent:

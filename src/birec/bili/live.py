@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import aiohttp
 from loguru import logger
 
+from ..event.event_emitter import EventEmitter, EventListener
 from .api import AppApi, WebApi
 from .exceptions import (
     LiveRoomEncrypted,
@@ -23,11 +24,22 @@ from .helpers import extract_codecs, extract_formats, extract_streams
 from .models import LiveStatus, RoomInfo, UserInfo
 from .typing import ApiPlatform, QualityNumber, StreamCodec, StreamFormat
 
-__all__ = ("Live",)
+__all__ = ("Live", "LiveRoomChangedListener")
 
 
-class Live:
-    """Encapsulates a Bilibili live room's runtime state and stream access."""
+class LiveRoomChangedListener(EventListener):
+    """Interface for listeners notified when room/user info visibly changes."""
+
+    def on_room_changed(self, live: Live) -> None: ...
+
+
+class Live(EventEmitter[LiveRoomChangedListener]):
+    """Encapsulates a Bilibili live room's runtime state and stream access.
+
+    Emits events:
+    - room_changed: ``refresh()`` detected a change in the fields that get
+      displayed or rendered into output paths (title/cover/area/uname).
+    """
 
     def __init__(
         self,
@@ -36,6 +48,7 @@ class Live:
         session: aiohttp.ClientSession,
         api_platform: ApiPlatform = "web",
     ) -> None:
+        EventEmitter.__init__(self)
         self._room_id = room_id
         self._logger = logger.bind(room_id=room_id)
         self._session = session
@@ -119,13 +132,48 @@ class Live:
         await self.refresh()
 
     async def refresh(self) -> None:
-        """Reload room and user info from API."""
+        """Reload room and user info from API.
+
+        When the room was loaded before and one of the fields that get
+        displayed or rendered into output paths changed, notify the
+        room-changed listeners: this is how a mid-recording rename reaches
+        the recorder's path rendering and the frontend's task data (#40).
+        """
+        had_info = self._room_info is not None
+        old_signature = self._info_signature(self._room_info, self._user_info)
         data = await self._api.get_info_by_room(self._room_id)
         self._room_info = RoomInfo.from_data(data["room_info"])
         self._user_info = UserInfo.from_info_by_room(data)
         self._room_id = self._room_info.room_id
         self._logger = logger.bind(room_id=self._room_id)
         self._has_flv_stream = await self._detect_flv_stream()
+        if had_info and old_signature != self._info_signature(
+            self._room_info, self._user_info
+        ):
+            self._logger.info("Room info changed, notifying listeners")
+            await self._emit("room_changed", self)
+
+    @staticmethod
+    def _info_signature(
+        room_info: RoomInfo | None, user_info: UserInfo | None
+    ) -> tuple[object, ...]:
+        """The fields whose change matters to naming or display (#40).
+
+        Volatile fields are deliberately excluded: the viewer count churns
+        constantly, and live status / start time have their own begin/end
+        channel, so letting them count as "changed" would spam notifications
+        without a single real edit behind them.
+        """
+        if room_info is None:
+            return ()
+        return (
+            room_info.room_id,
+            room_info.title,
+            room_info.cover,
+            room_info.area_name,
+            room_info.parent_area_name,
+            user_info.name if user_info is not None else "",
+        )
 
     async def _detect_flv_stream(self) -> bool:
         """Check if FLV stream is available for this room."""

@@ -28,7 +28,7 @@ from .helpers import (
     request_qrcode,
     room_init,
 )
-from .live import Live
+from .live import Live, LiveRoomChangedListener
 from .live_monitor import LiveMonitor, LiveMonitorListener
 from .models import LiveStatus, RoomInfo, UserInfo
 from .net import get_connector, timeout
@@ -55,6 +55,7 @@ __all__ = (
     "Live",
     "LiveMonitor",
     "LiveMonitorListener",
+    "LiveRoomChangedListener",
     "LiveRoomEncrypted",
     "LiveRoomHidden",
     "LiveRoomLocked",

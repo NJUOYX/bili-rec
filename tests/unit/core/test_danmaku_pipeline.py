@@ -393,7 +393,12 @@ class TestLiveCommandsReachTheMonitor:
     @pytest.mark.asyncio
     async def test_room_change_reaches_the_monitor(self):
         monitor, listener, receiver = _make_wired_monitor()
-        with patch.object(monitor, "_periodic_check_loop", new=AsyncMock()):
+        with (
+            patch.object(monitor, "_periodic_check_loop", new=AsyncMock()),
+            # ROOM_CHANGE now pulls the fresh room info first (#40); against
+            # the mocked session that would stall on retries.
+            patch.object(monitor._live, "refresh", new_callable=AsyncMock),
+        ):
             monitor.enable()
             receiver.on_danmaku({"cmd": "ROOM_CHANGE"})
             await asyncio.sleep(0.01)

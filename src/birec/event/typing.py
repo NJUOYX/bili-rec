@@ -10,6 +10,7 @@ from .models import (
     PostprocessingCompletedEvent,
     RawDanmakuFileCompletedEvent,
     RawDanmakuFileCreatedEvent,
+    TaskRefreshedEvent,
     VideoFileCompletedEvent,
     VideoFileCreatedEvent,
     VideoPostprocessingCompletedEvent,
@@ -27,5 +28,6 @@ Event = (
     | CoverImageDownloadedEvent
     | VideoPostprocessingCompletedEvent
     | PostprocessingCompletedEvent
+    | TaskRefreshedEvent
     | Error
 )
