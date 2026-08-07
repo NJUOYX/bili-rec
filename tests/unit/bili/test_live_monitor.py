@@ -118,10 +118,32 @@ class TestLiveMonitorCommands:
         monitor.add_listener(listener)
         monitor.enable()
 
-        await monitor.handle_command("ROOM_CHANGE")
+        with patch.object(live, "refresh", new_callable=AsyncMock) as m_refresh:
+            await monitor.handle_command("ROOM_CHANGE")
 
+        # The command carries no details: the new room info must be pulled
+        # before listeners are handed the Live state (#40).
+        m_refresh.assert_awaited_once()
         assert listener.events == ["room_changed"]
         assert listener.lives == [live]
+        monitor.disable()
+
+    async def test_room_change_command_still_emits_when_refresh_fails(self) -> None:
+        """A failed refresh must not eat the notification (#40).
+
+        The periodic check catches up later; dropping the event would leave
+        listeners unaware anything happened at all.
+        """
+        monitor, live = _make_monitor()
+        listener = _RecordingListener()
+        monitor.add_listener(listener)
+        monitor.enable()
+
+        with patch.object(live, "refresh", new_callable=AsyncMock) as m_refresh:
+            m_refresh.side_effect = Exception("API down")
+            await monitor.handle_command("ROOM_CHANGE")
+
+        assert listener.events == ["room_changed"]
         monitor.disable()
 
     async def test_disabling_forgets_whether_the_room_was_live(self) -> None:
@@ -353,6 +375,7 @@ class TestPeriodicCheck:
 
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock),
             patch.object(monitor, "_start_stream_poll"),
         ):
             m.return_value = LiveStatus.LIVE
@@ -371,6 +394,7 @@ class TestPeriodicCheck:
 
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock),
             patch.object(monitor, "_start_stream_poll"),
         ):
             m.return_value = LiveStatus.LIVE
@@ -388,7 +412,10 @@ class TestPeriodicCheck:
         monitor._is_living = True
         monitor._stream_available = True
 
-        with patch.object(live, "get_live_status", new_callable=AsyncMock) as m:
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock),
+        ):
             m.return_value = LiveStatus.PREPARING
             await monitor._check_status()
 
@@ -405,6 +432,7 @@ class TestPeriodicCheck:
 
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock),
             patch.object(monitor, "_start_stream_poll"),
         ):
             m.return_value = LiveStatus.LIVE
@@ -413,10 +441,49 @@ class TestPeriodicCheck:
         # No new events since already living
         assert listener.events == []
 
+    async def test_periodic_check_refreshes_room_info(self) -> None:
+        """A rename whose ROOM_CHANGE got lost must be caught by the poll (#40).
+
+        ``Live.refresh()`` only notifies when something actually changed, so
+        doing this every check stays silent unless the room was really edited.
+        """
+        monitor, live = _make_monitor()
+
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock) as m_refresh,
+        ):
+            m.return_value = LiveStatus.PREPARING
+            await monitor._check_status()
+
+        m_refresh.assert_awaited_once()
+
+    async def test_periodic_check_survives_a_failing_refresh(self) -> None:
+        """The room-info refresh is best-effort: a failure must not disturb
+        the status reconciliation it rides on (#40)."""
+        monitor, live = _make_monitor()
+        listener = _RecordingListener()
+        monitor.add_listener(listener)
+        monitor._is_living = True
+
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock) as m_refresh,
+        ):
+            m.return_value = LiveStatus.PREPARING
+            m_refresh.side_effect = Exception("API down")
+            await monitor._check_status()
+
+        assert monitor.is_living is False
+        assert listener.events == ["live_ended"]
+
     async def test_periodic_loop_sleeps_interval_plus_jitter(self) -> None:
         """Each cycle waits the full interval ± jitter, then checks again."""
         monitor, live = _make_monitor()
-        with patch.object(live, "get_live_status", new_callable=AsyncMock) as m_status:
+        with (
+            patch.object(live, "get_live_status", new_callable=AsyncMock) as m_status,
+            patch.object(live, "refresh", new_callable=AsyncMock),
+        ):
             m_status.return_value = LiveStatus.PREPARING
 
             # Deterministic jitter: peek at the seeded value, then reseed so
@@ -464,6 +531,7 @@ class TestCommandAndPollingInterleaving:
 
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock),
             patch.object(monitor, "_start_stream_poll"),
         ):
             await monitor.handle_command("LIVE")
@@ -482,6 +550,7 @@ class TestCommandAndPollingInterleaving:
 
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock),
             patch.object(monitor, "_start_stream_poll"),
         ):
             await monitor.handle_command("LIVE")
@@ -505,6 +574,7 @@ class TestCommandAndPollingInterleaving:
 
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock),
             patch.object(monitor, "_start_stream_poll"),
         ):
             m.return_value = LiveStatus.LIVE
@@ -523,6 +593,7 @@ class TestCommandAndPollingInterleaving:
 
         with (
             patch.object(live, "get_live_status", new_callable=AsyncMock) as m,
+            patch.object(live, "refresh", new_callable=AsyncMock),
             patch.object(monitor, "_start_stream_poll"),
         ):
             m.return_value = LiveStatus.PREPARING
