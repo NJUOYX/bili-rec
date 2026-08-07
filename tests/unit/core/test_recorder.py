@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from birec.bili.live import Live
 from birec.bili.live_monitor import LiveMonitor
 from birec.bili.models import LiveStatus, RoomInfo, UserInfo
 from birec.core.cover_downloader import CoverDownloader
@@ -523,6 +524,99 @@ class TestRecorder:
         assert recorder.is_recording is False
         recorder.on_live_stream_reset(recorder._live)
         assert recorder.is_recording is False
+
+
+def _info_payload(title: str, uname: str) -> dict:
+    """A getInfoByRoom payload whose display fields are parameters."""
+    return {
+        "room_info": {
+            "uid": 99,
+            "room_id": 12345,
+            "short_id": 0,
+            "area_id": 1,
+            "area_name": "Game",
+            "parent_area_id": 1,
+            "parent_area_name": "Entertainment",
+            "live_status": 1,
+            "live_start_time": 0,
+            "online": 1,
+            "title": title,
+            "cover": "",
+            "tags": "",
+            "description": "",
+        },
+        "anchor_info": {
+            "base_info": {
+                "uname": uname,
+                "gender": "",
+                "face": "https://example.com/face.jpg",
+            }
+        },
+    }
+
+
+class TestRecorderRoomChangedWiring:
+    """The recorder must subscribe to Live's room_changed (#40).
+
+    A renamed room used to die on the vine: ``Live.refresh()`` stored the new
+    info and stopped, so the recorder's ``on_room_changed`` never ran and the
+    path provider kept rendering the old title/uname into every later session.
+    These tests drive a real ``Live`` so the emission is exercised end to end.
+    """
+
+    @staticmethod
+    def _build(tmp_path: Path) -> tuple[Recorder, PathProvider, Live]:
+        live = Live(12345, session=MagicMock(), api_platform="web")
+        monitor = LiveMonitor(live)
+        pp = PathProvider(str(tmp_path), "{uname} - {title}")
+        recorder = Recorder(
+            room_id=12345,
+            live=live,
+            monitor=monitor,
+            session=MagicMock(),
+            path_provider=pp,
+        )
+        return recorder, pp, live
+
+    @staticmethod
+    async def _load(live: Live, title: str, uname: str) -> None:
+        with (
+            patch.object(live.api, "get_info_by_room", new_callable=AsyncMock) as m,
+            patch.object(live.api, "get_room_play_infos", new_callable=AsyncMock) as m2,
+        ):
+            m.return_value = _info_payload(title, uname)
+            m2.return_value = []
+            await live.refresh()
+
+    @pytest.mark.asyncio
+    async def test_init_registers_as_room_changed_listener(self, tmp_path):
+        recorder, _, live = self._build(tmp_path)
+        assert recorder in live._listeners
+
+    @pytest.mark.asyncio
+    async def test_rename_renders_into_later_paths(self, tmp_path):
+        recorder, pp, live = self._build(tmp_path)
+        await self._load(live, "Old Title", "OldName")
+        # The first load is what on_live_began would apply at broadcast start.
+        recorder.update_info(live.room_info, live.user_info)
+        assert pp.render() == str(tmp_path) + "/OldName - Old Title"
+
+        await self._load(live, "New Title", "NewName")
+
+        assert pp.render() == str(tmp_path) + "/NewName - New Title"
+        await recorder.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_detaches_room_changed_listener(self, tmp_path):
+        recorder, pp, live = self._build(tmp_path)
+        await self._load(live, "Old Title", "OldName")
+        recorder.update_info(live.room_info, live.user_info)
+        await recorder.stop()
+
+        await self._load(live, "New Title", "NewName")
+
+        # Detached on stop: the rename no longer reaches the path provider.
+        assert pp.render() == str(tmp_path) + "/OldName - Old Title"
 
 
 class TestRecorderMutationKillers:
