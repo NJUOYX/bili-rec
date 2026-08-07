@@ -11,6 +11,7 @@
  * | CoverImageDownloadedEvent               | ['tasks'] 前缀（卡片封面）+ ['task', room, 'data'] |
  * | VideoPostprocessingCompletedEvent       | ['task', room, 'data']（后处理进度/产物）      |
  * | PostprocessingCompletedEvent            | 同上                                           |
+ * | TaskRefreshedEvent                      | ['tasks'] 前缀 + ['task', room, 'data']（标题/主播名，#40）|
  * | Error                                   | 无缓存动作（汇入事件/异常面板，§9）            |
  *
  * 运行态高频字段（dl_rate/rec_rate/…）由 ['task', room, 'data'] 承载，
@@ -63,6 +64,13 @@ export function applyEventToCache(
       break
     case 'VideoPostprocessingCompletedEvent':
     case 'PostprocessingCompletedEvent':
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.task(event.data.room_id, 'data'),
+      })
+      break
+    case 'TaskRefreshedEvent':
+      // 房间改名/主播名变化：标题与主播名展示在列表卡片与详情中（#40）
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
       void queryClient.invalidateQueries({
         queryKey: queryKeys.task(event.data.room_id, 'data'),
       })

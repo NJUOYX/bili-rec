@@ -92,6 +92,19 @@ describe('EventLogPanel', () => {
     expect(screen.getAllByText(/23058/).length).toBeGreaterThan(0)
   })
 
+  it('渲染 TaskRefreshedEvent（房间信息已刷新，#40）', () => {
+    act(() => {
+      useEventLogStore.getState().pushEvent({
+        type: 'TaskRefreshedEvent',
+        id: 'evt-refresh',
+        date: '2026-07-29T10:00:00+08:00',
+        data: { room_id: 42 },
+      })
+    })
+    render(<EventLogPanel />)
+    expect(screen.getByText('房间信息已刷新')).toBeTruthy()
+  })
+
   it('limit 截断（紧凑态）', () => {
     act(() => {
       for (let i = 0; i < 5; i += 1) {
@@ -118,9 +131,16 @@ describe('EventLogPanel', () => {
       data: { room_id: 1, files: ['a.mp4', 'b.xml'] },
     }
     expect(describeEvent(done)).toBe('房间 1 · 2 个产物')
+    const refreshed: AppEvent = {
+      type: 'TaskRefreshedEvent',
+      id: 'r',
+      date: '2026-07-29T10:00:00+08:00',
+      data: { room_id: 42 },
+    }
+    expect(describeEvent(refreshed)).toBe('房间 42 · 房间信息已刷新')
   })
 
   it('标签映射覆盖全部事件类型', () => {
-    expect(Object.keys(EVENT_TYPE_LABELS)).toHaveLength(10)
+    expect(Object.keys(EVENT_TYPE_LABELS)).toHaveLength(11)
   })
 })

@@ -27,6 +27,11 @@ export interface PostprocessingCompletedEventData {
   files: string[]
 }
 
+/** TaskRefreshedEvent 载荷：仅房间号（房间信息已刷新，标题/主播名可能变化，#40）。 */
+export interface TaskRefreshedEventData {
+  room_id: number
+}
+
 /** Error 事件载荷：异常名 + 详情。 */
 export interface ErrorEventData {
   name: string
@@ -60,10 +65,15 @@ export type PostprocessingCompletedEvent = EventShell<
   'PostprocessingCompletedEvent',
   PostprocessingCompletedEventData
 >
+export type TaskRefreshedEvent = EventShell<
+  'TaskRefreshedEvent',
+  TaskRefreshedEventData
+>
 export type ErrorEvent = EventShell<'Error', ErrorEventData>
 
 /** `/ws/v1/events` 全部业务事件的可辨识联合（§7.2）。 */
-export type AppEvent = FileEvent | PostprocessingCompletedEvent | ErrorEvent
+export type AppEvent =
+  FileEvent | PostprocessingCompletedEvent | TaskRefreshedEvent | ErrorEvent
 
 /** `/ws/v1/exceptions` 消息体：`{type, message, traceback}`（§7.1）。 */
 export interface ExceptionMessage {
@@ -108,6 +118,10 @@ function isErrorData(data: Record<string, unknown>): boolean {
   return typeof data.name === 'string' && typeof data.detail === 'string'
 }
 
+function isTaskRefreshedData(data: Record<string, unknown>): boolean {
+  return typeof data.room_id === 'number'
+}
+
 /**
  * 解析 `/ws/v1/events` 消息：合法业务事件或 ping 返回对应对象，
  * 未知类型/畸形载荷返回 null（调用侧静默丢弃，避免崩溃）。
@@ -124,6 +138,11 @@ export function parseEventMessage(raw: unknown): AppEvent | PingMessage | null {
   if (type === 'PostprocessingCompletedEvent') {
     return isPostprocessingData(data)
       ? (raw as unknown as PostprocessingCompletedEvent)
+      : null
+  }
+  if (type === 'TaskRefreshedEvent') {
+    return isTaskRefreshedData(data)
+      ? (raw as unknown as TaskRefreshedEvent)
       : null
   }
   if (type === 'Error') {
