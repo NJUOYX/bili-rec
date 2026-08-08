@@ -437,11 +437,27 @@ class RecordTask(LiveRoomChangedListener):
         info = await self._live.api.get_danmu_info(self._room_id)
         usable = [entry for entry in info.get("host_list", []) if entry.get("host")]
         hosts = [entry["host"] for entry in usable]
-        # Each host states its own port, and the two lists have to stay aligned:
+        # Each host states its own port, and the lists have to stay aligned:
         # rotating to a later host with the first one's port aims at an address
-        # nobody advertised.
-        ports = [entry.get("wss_port") or 443 for entry in usable]
-        self._danmaku_client.set_danmu_info(hosts, info.get("token", ""), ports=ports)
+        # nobody advertised. The scheme flag records which field the port came
+        # from, because the number no longer says it: the platform moved its
+        # TLS endpoint off 443 (``wss_port`` is 2245 in the wild), and a guess
+        # from the number sent the TLS port at a plaintext handshake (#43).
+        ports: list[int] = []
+        secure: list[bool] = []
+        for entry in usable:
+            if entry.get("wss_port"):
+                ports.append(entry["wss_port"])
+                secure.append(True)
+            elif entry.get("ws_port"):
+                ports.append(entry["ws_port"])
+                secure.append(False)
+            else:
+                ports.append(443)
+                secure.append(True)
+        self._danmaku_client.set_danmu_info(
+            hosts, info.get("token", ""), ports=ports, secure=secure
+        )
 
     async def destroy(self) -> None:
         """Tear down all components for this task."""
