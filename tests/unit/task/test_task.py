@@ -232,12 +232,13 @@ class TestRecordTaskLifecycle:
         """Without hosts the danmaku client can never open its WebSocket.
 
         The port travels with them: the API states it alongside each host, and
-        assuming 443 would be ignoring what it told us.
+        assuming 443 would be ignoring what it told us. So does the scheme the
+        port came from: the client must not guess TLS from the number (#43).
         """
         task, comps = _make_task()
         await task.setup()
         comps["danmaku_client"].set_danmu_info.assert_called_once_with(
-            ["broadcastlv.chat.bilibili.com"], "danmu-token", ports=[443]
+            ["broadcastlv.chat.bilibili.com"], "danmu-token", ports=[443], secure=[True]
         )
 
     async def test_setup_feeds_hosts_even_when_monitor_disabled(self) -> None:
@@ -1230,7 +1231,10 @@ class TestTaskMutationKillers:
         )
         await task._fetch_danmu_info()
         comps["danmaku_client"].set_danmu_info.assert_called_once_with(
-            ["a.example.com", "b.example.com"], "tok123", ports=[2243, 443]
+            ["a.example.com", "b.example.com"],
+            "tok123",
+            ports=[2243, 443],
+            secure=[True, True],
         )
 
     async def test_fetch_danmu_info_default_port(self) -> None:
@@ -1243,7 +1247,7 @@ class TestTaskMutationKillers:
         )
         await task._fetch_danmu_info()
         comps["danmaku_client"].set_danmu_info.assert_called_once_with(
-            ["c.example.com"], "tok", ports=[443]
+            ["c.example.com"], "tok", ports=[443], secure=[True]
         )
 
     async def test_fetch_danmu_info_empty_token(self) -> None:
@@ -1253,7 +1257,67 @@ class TestTaskMutationKillers:
         )
         await task._fetch_danmu_info()
         comps["danmaku_client"].set_danmu_info.assert_called_once_with(
-            ["h.com"], "", ports=[443]
+            ["h.com"], "", ports=[443], secure=[True]
+        )
+
+    async def test_fetch_danmu_info_tls_field_wins_whatever_the_number(self) -> None:
+        """Regression (#43): ``wss_port`` is the TLS endpoint, 443 or not.
+
+        The platform moved it to 2245 and states the plaintext endpoint in
+        ``ws_port`` alongside it. Taking the number for a scheme guess sent
+        the TLS port over plaintext ``ws://`` and killed every danmaku file.
+        """
+        task, comps = _make_task()
+        comps["live"].api.get_danmu_info = AsyncMock(
+            return_value={
+                "host_list": [
+                    {
+                        "host": "zj-cn-live-comet.chat.bilibili.com",
+                        "port": 2243,
+                        "wss_port": 2245,
+                        "ws_port": 2244,
+                    }
+                ],
+                "token": "tok",
+            }
+        )
+        await task._fetch_danmu_info()
+        comps["danmaku_client"].set_danmu_info.assert_called_once_with(
+            ["zj-cn-live-comet.chat.bilibili.com"], "tok", ports=[2245], secure=[True]
+        )
+
+    async def test_fetch_danmu_info_plaintext_field_is_marked_plaintext(self) -> None:
+        """A host stating only ``ws_port`` offers a plaintext endpoint."""
+        task, comps = _make_task()
+        comps["live"].api.get_danmu_info = AsyncMock(
+            return_value={
+                "host_list": [{"host": "ws-only.example.com", "ws_port": 2244}],
+                "token": "tok",
+            }
+        )
+        await task._fetch_danmu_info()
+        comps["danmaku_client"].set_danmu_info.assert_called_once_with(
+            ["ws-only.example.com"], "tok", ports=[2244], secure=[False]
+        )
+
+    async def test_fetch_danmu_info_keeps_scheme_paired_per_host(self) -> None:
+        """Each host's port keeps the scheme of the field it came from (#43)."""
+        task, comps = _make_task()
+        comps["live"].api.get_danmu_info = AsyncMock(
+            return_value={
+                "host_list": [
+                    {"host": "tls.example.com", "wss_port": 2245},
+                    {"host": "plain.example.com", "ws_port": 2244},
+                ],
+                "token": "tok",
+            }
+        )
+        await task._fetch_danmu_info()
+        comps["danmaku_client"].set_danmu_info.assert_called_once_with(
+            ["tls.example.com", "plain.example.com"],
+            "tok",
+            ports=[2245, 2244],
+            secure=[True, False],
         )
 
     # ── __init__ wiring precision ─────────────────────────────────────

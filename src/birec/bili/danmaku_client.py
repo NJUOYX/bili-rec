@@ -78,6 +78,7 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
         self._token: str = ""
         self._host_index: int = 0
         self._ports: list[int] = []
+        self._secure: list[bool] = []
 
         # Connection state
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -144,19 +145,31 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
     # --- Danmaku server info ---
 
     def set_danmu_info(
-        self, hosts: list[str], token: str, *, ports: list[int] | None = None
+        self,
+        hosts: list[str],
+        token: str,
+        *,
+        ports: list[int] | None = None,
+        secure: list[bool] | None = None,
     ) -> None:
         """Set danmaku server hosts and auth token from get_danmu_info API.
 
-        ``ports`` pairs up with ``hosts``: each broadcast server states its own,
-        almost always 443 but not necessarily. They have to stay paired, because
-        rotating to the next host while keeping the previous host's port is a
-        different address than the one advertised, and usually a dead one.
+        ``ports`` pairs up with ``hosts``: each broadcast server states its own
+        port, and the two lists have to stay aligned, because rotating to the
+        next host while keeping the previous host's port is a different address
+        than the one advertised, and usually a dead one. ``secure`` pairs up
+        with ``ports`` the same way and says whether that port is a TLS
+        endpoint. The scheme follows the API field the port came from
+        (``wss_port`` vs ``ws_port``), never the number itself (#43): the
+        platform's TLS endpoint is not on 443 any more, so guessing TLS from
+        the number aims a TLS port at a plaintext handshake. A port without a
+        stated flag is treated as TLS, the safer of the two.
         """
         self._hosts = hosts
         self._token = token
         self._host_index = 0
         self._ports = list(ports) if ports else []
+        self._secure = list(secure) if secure else []
 
     # --- AsyncStoppableMixin ---
 
@@ -225,14 +238,22 @@ class DanmakuClient(AsyncStoppableMixin, EventEmitter[DanmakuClientListener]):
     def _build_url(self, index: int) -> str:
         """Build the broadcast WebSocket URL for the host at ``index``.
 
-        The scheme follows that host's own port: 443 is the TLS endpoint the API
-        normally advertises, anything else is plaintext.
+        The scheme follows the flag paired with that host's port — i.e. the
+        API field the port came from — not the number itself (#43): a
+        ``wss_port`` is the TLS endpoint even at 2245, and only a port
+        advertised via ``ws_port`` is plaintext. A host that stated no port
+        falls back to the TLS default endpoint.
         """
         host = self._hosts[index]
-        port = self._ports[index] if index < len(self._ports) else None
-        if port is None or port == 443:
+        if index >= len(self._ports):
             return f"wss://{host}/sub"
-        return f"ws://{host}:{port}/sub"
+        port = self._ports[index]
+        secure = self._secure[index] if index < len(self._secure) else True
+        if not secure:
+            return f"ws://{host}:{port}/sub"
+        if port == 443:
+            return f"wss://{host}/sub"
+        return f"wss://{host}:{port}/sub"
 
     async def _connect_and_receive(self) -> None:
         """Establish WS connection, authenticate, and receive messages."""

@@ -51,8 +51,24 @@ class TestDanmakuWebSocket:
             pytest.skip(f"room {live.room_id} is not LIVE (status={status.name})")
 
         info = await live.api.get_danmu_info(live.room_id)
-        hosts = [entry["host"] for entry in info["host_list"] if entry.get("host")]
-        assert hosts, "danmu_info returned no hosts"
+        usable = [entry for entry in info["host_list"] if entry.get("host")]
+        assert usable, "danmu_info returned no hosts"
+        # Mirror the production task layer: each host's port travels with the
+        # scheme of the field it came from. The platform's TLS endpoint moved
+        # off 443, so assuming the default port no longer reaches it (#43).
+        hosts = [entry["host"] for entry in usable]
+        ports: list[int] = []
+        secure: list[bool] = []
+        for entry in usable:
+            if entry.get("wss_port"):
+                ports.append(entry["wss_port"])
+                secure.append(True)
+            elif entry.get("ws_port"):
+                ports.append(entry["ws_port"])
+                secure.append(False)
+            else:
+                ports.append(443)
+                secure.append(True)
 
         client = DanmakuClient(
             live.room_id,
@@ -60,7 +76,7 @@ class TestDanmakuWebSocket:
             cookie=bili_cookie,
             user_agent=live.user_agent,
         )
-        client.set_danmu_info(hosts, info["token"])
+        client.set_danmu_info(hosts, info["token"], ports=ports, secure=secure)
         listener = _CollectingListener()
         client.add_listener(listener)
 

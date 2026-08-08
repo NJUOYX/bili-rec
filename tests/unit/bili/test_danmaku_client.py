@@ -321,40 +321,67 @@ class TestBroadcastUrl:
 
     def test_port_443_stays_on_tls(self) -> None:
         client = _make_client()
-        client.set_danmu_info(["host.example"], "t", ports=[443])
+        client.set_danmu_info(["host.example"], "t", ports=[443], secure=[True])
         assert client._build_url(0) == "wss://host.example/sub"
 
-    def test_another_port_is_honoured(self) -> None:
-        """Regression: the port from the API used to be dropped on the floor.
+    def test_a_tls_port_that_is_not_443_stays_on_tls(self) -> None:
+        """Regression (#43): the scheme follows the field, not the number.
 
-        The URL was hardcoded to ``wss://{host}/sub``, so any endpoint not on
-        443 was simply unreachable, whatever the API said.
+        The platform moved its TLS broadcast endpoint off 443 — ``wss_port``
+        is 2245 in the wild now. Inferring TLS from the port number sent the
+        client at that TLS port over plaintext ``ws://``, the handshake came
+        back 400, retries ran out, and every danmaku file stayed empty.
         """
         client = _make_client()
-        client.set_danmu_info(["127.0.0.1"], "t", ports=[8080])
-        assert client._build_url(0) == "ws://127.0.0.1:8080/sub"
+        client.set_danmu_info(
+            ["zj-cn-live-comet.chat.bilibili.com"], "t", ports=[2245], secure=[True]
+        )
+        assert (
+            client._build_url(0) == "wss://zj-cn-live-comet.chat.bilibili.com:2245/sub"
+        )
 
-    def test_each_host_keeps_its_own_port(self) -> None:
+    def test_a_stated_plaintext_port_stays_plaintext(self) -> None:
+        """A port the API advertised via ``ws_port`` is plaintext whatever it is."""
+        client = _make_client()
+        client.set_danmu_info(["127.0.0.1"], "t", ports=[2244], secure=[False])
+        assert client._build_url(0) == "ws://127.0.0.1:2244/sub"
+
+    def test_each_host_keeps_its_own_port_and_scheme(self) -> None:
         """Regression: rotating hosts used to carry the first host's port along.
 
         Only ``host_list[0]``'s port was kept, so the moment the client rotated
         away from the first host it aimed the next one's hostname at the previous
         one's port — an address nobody advertised. With the first host down, the
         rotation that exists to save the connection could never reach any of the
-        others.
+        others. The same pairing holds for the scheme: a TLS host must not be
+        demoted to plaintext because its successor was, or vice versa.
         """
         client = _make_client()
-        client.set_danmu_info(["a.example", "b.example"], "t", ports=[8080, 9090])
+        client.set_danmu_info(
+            ["a.example", "b.example", "c.example"],
+            "t",
+            ports=[2245, 443, 2244],
+            secure=[True, True, False],
+        )
 
-        assert client._build_url(0) == "ws://a.example:8080/sub"
-        assert client._build_url(1) == "ws://b.example:9090/sub"
+        assert client._build_url(0) == "wss://a.example:2245/sub"
+        assert client._build_url(1) == "wss://b.example/sub"
+        assert client._build_url(2) == "ws://c.example:2244/sub"
 
     def test_a_host_without_a_stated_port_falls_back_to_tls(self) -> None:
         """A shorter port list must not make the extra hosts unusable."""
         client = _make_client()
-        client.set_danmu_info(["a.example", "b.example"], "t", ports=[8080])
+        client.set_danmu_info(
+            ["a.example", "b.example"], "t", ports=[2245], secure=[True]
+        )
 
         assert client._build_url(1) == "wss://b.example/sub"
+
+    def test_a_port_without_a_stated_scheme_defaults_to_tls(self) -> None:
+        """When in doubt, encrypt: an unflagged port must not drop to ws://."""
+        client = _make_client()
+        client.set_danmu_info(["host.example"], "t", ports=[2245])
+        assert client._build_url(0) == "wss://host.example:2245/sub"
 
 
 class TestConnectionState:

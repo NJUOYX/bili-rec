@@ -201,6 +201,11 @@ class TestTaskAddE2E:
         client = task._danmaku_client  # noqa: SLF001
         assert client._hosts == ["127.0.0.1"]  # noqa: SLF001
         assert client._token == "fake_danmaku_token"  # noqa: SLF001
+        # The fake states only a plaintext port, and the port must travel with
+        # the scheme of the field it came from — a scheme guessed from the
+        # number is exactly what broke production (#43).
+        assert client._ports == [fake_server.port]  # noqa: SLF001
+        assert client._secure == [False]  # noqa: SLF001
 
         await started_client.delete("/api/v1/tasks/12345")
 

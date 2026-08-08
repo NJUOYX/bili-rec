@@ -509,8 +509,10 @@ class FakeBiliServer:
     def _danmaku_host_list(self) -> list[dict[str, Any]]:
         """The broadcast servers to advertise, dead one first when asked for.
 
-        The client picks the TLS port; this server is plaintext, so it
-        advertises its own port and the client's scheme follows it.
+        This server is plaintext, so it states only plaintext fields: since
+        #43 the client takes ``wss_port`` as TLS whatever number it carries,
+        and a TLS handshake against this endpoint would fail exactly the way
+        it fails against the wrong port in production.
         """
         if self.advertise:
             parsed = urlparse(self.advertise)
@@ -522,7 +524,6 @@ class FakeBiliServer:
         live = {
             "host": host,
             "port": port,
-            "wss_port": port,
             "ws_port": port,
         }
         if not self.fault.danmaku_dead_host_first:
@@ -530,7 +531,6 @@ class FakeBiliServer:
         dead = {
             "host": host,
             "port": _DEAD_PORT,
-            "wss_port": _DEAD_PORT,
             "ws_port": _DEAD_PORT,
         }
         return [dead, live]
